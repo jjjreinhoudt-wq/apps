@@ -25,7 +25,7 @@
         window.launchQueue.setConsumer(async function (p) {
           if (!p || !p.files || !p.files.length) return;
           var out = [];
-          for (var i = 0; i < p.files.length; i++) { try { out.push(await p.files[i].getFile()); } catch (e) {} }
+          for (var i = 0; i < p.files.length; i++) { try { var f = await p.files[i].getFile(); try { f.handle = p.files[i]; } catch (e2) {} out.push(f); } catch (e) {} }
           if (out.length) cb(out);
         });
       } catch (e) {}

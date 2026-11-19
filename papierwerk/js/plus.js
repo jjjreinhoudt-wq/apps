@@ -680,7 +680,8 @@ async function rebake(label, edit, done) {
   if (!src) return false;
   // bladwijzers verwijzen naar pagina's; die krijgen nieuwe nummers, in dezelfde volgorde
   const oldIds = S.pages.map(p => p.id), pages = await pagesOf(src);
-  replaceDoc([{ src, pages }], name, { meta: keepMeta, assets: {} });
+  const keepHandle = S.saveHandle;
+  replaceDoc([{ src, pages }], name, { meta: keepMeta, assets: {}, saveHandle: keepHandle });
   if (Array.isArray(keepOutline)) S.outline = keepOutline.map(o => ({ title: o.title, page: (pages[oldIds.indexOf(o.page)] || {}).id })).filter(o => o.page);
   setDirty(true);
   scheduleSessionSave();
@@ -1076,13 +1077,13 @@ document.head.append(h('style', { text: `
 ` }));
 function stashDoc() {
   return { name: S.name, sources: S.sources, pages: S.pages, assets: S.assets, fx: S.fx, meta: S.meta, outline: S.outline, dirty: S.dirty, isExample: S.isExample,
-    hist: S.hist, fut: S.fut, lastSnap, scale: S.scale, top: viewer.scrollTop, left: viewer.scrollLeft };
+    hist: S.hist, fut: S.fut, lastSnap, scale: S.scale, saveHandle: S.saveHandle, top: viewer.scrollTop, left: viewer.scrollLeft };
 }
 function loadDoc(d) {
   endTextEdit(true);
   if (LEES.on) stopReading();
   clearThumbs();
-  Object.assign(S, { name: d.name, sources: d.sources, pages: d.pages, assets: d.assets, fx: d.fx, meta: d.meta, outline: d.outline, isExample: d.isExample, hist: d.hist, fut: d.fut, sel: null, scale: d.scale });
+  Object.assign(S, { name: d.name, sources: d.sources, pages: d.pages, assets: d.assets, fx: d.fx, meta: d.meta, outline: d.outline, isExample: d.isExample, hist: d.hist, fut: d.fut, sel: null, scale: d.scale, saveHandle: d.saveHandle || null });
   lastSnap = d.lastSnap;
   Q.q = ''; Q.hits = []; Q.cur = -1;
   $('#docName').textContent = S.name;
@@ -1101,7 +1102,7 @@ function parkCurrent() {
   if (!S.pages.length || S.isExample) return null;      // een leeg scherm of het voorbeeld wordt gewoon vervangen
   const d = stashDoc();
   DOCS.list[DOCS.cur] = d;
-  S.sources = {}; S.pages = []; S.assets = {}; S.hist = []; S.fut = []; S.dirty = false; S.outline = undefined;
+  S.sources = {}; S.pages = []; S.assets = {}; S.hist = []; S.fut = []; S.dirty = false; S.outline = undefined; S.saveHandle = null;
   DOCS.cur = DOCS.list.length; DOCS.list.push(null);
   return () => { DOCS.list.pop(); DOCS.cur = DOCS.list.indexOf(d); DOCS.list[DOCS.cur] = null; loadDoc(d); };
 }
@@ -1115,7 +1116,8 @@ async function inNewTab(fn) {
 async function openDoc(files) {
   files = Array.from(files || []);
   if (!files.length) return;
-  await inNewTab(() => openDocHere(files));
+  // via Openen met op de computer komt het bestand zelf mee; dan kan Opslaan het later overschrijven
+  await inNewTab(async () => { await openDocHere(files); if (S.pages.length && files.length === 1 && files[0].handle) S.saveHandle = files[0].handle; });
 }
 function switchTab(i) {
   if (i === DOCS.cur || !DOCS.list[i]) return;

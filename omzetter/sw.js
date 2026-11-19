@@ -1,5 +1,5 @@
 /* Omzetter — offline en "Delen naar deze app". Verhoog VERSION bij elke nieuwe uitgave. */
-const VERSION = "v9";
+const VERSION = "v10";
 const PREFIX = "omzetter-";
 const CACHE = PREFIX + VERSION;
 const SHARED = PREFIX + "gedeeld";

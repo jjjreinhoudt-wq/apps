@@ -329,22 +329,52 @@ function openSave() {
     h('span', { class: 'hint', text: 'Nette pdf-lezers houden zich hieraan. Het is een slot op de deur, geen kluis.' })));
   for (const n of notes) body.push(h('p', { class: 'hint', text: n }));
   body.push(h('p', { class: 'hint', text: 'Je krijgt een nieuwe PDF met al je aanpassingen. Het origineel blijft zoals het was.' }));
-  const go = async () => {
+  const canPick = !inClaude() && typeof window.showSaveFilePicker === 'function';
+  const same = canPick && S.saveHandle ? S.saveHandle : null;
+  const canShare = !canPick && !inClaude() && IS_TOUCH && typeof navigator.share === 'function' && typeof navigator.canShare === 'function';
+  const go = async mode => {
     const nm = cleanName(name.value);
+    let handle = null;
+    // de keuze waar het bestand komt moet meteen na de klik, dus vóór het opbouwen
+    if (mode === 'pick') {
+      try { handle = await window.showSaveFilePicker({ suggestedName: nm + '.pdf', types: [{ description: 'PDF-document', accept: { 'application/pdf': ['.pdf'] } }] }); }
+      catch (e) { if (e && e.name === 'AbortError') return; mode = 'download'; }
+    } else if (mode === 'same') {
+      handle = same;
+      try { if (handle.requestPermission && (await handle.requestPermission({ mode: 'readwrite' })) !== 'granted') return; } catch (e) { return; }
+    }
     sh.close();
     const bytes = await run('PDF opbouwen', prog => buildPdf(S.pages, { flatten: flat.checked, password: pw.value, restrict: { print: noPrint.checked, copy: noCopy.checked, edit: noEdit.checked }, progress: prog }));
     if (!bytes) return;
-    if (await saveFile(nm + '.pdf', bytes)) {
-      S.name = nm + '.pdf';
+    let ok = false, saved = nm + '.pdf', where = '';
+    if (handle) {
+      try { const w = await handle.createWritable(); await w.write(bytes); await w.close(); ok = true; saved = handle.name || saved; S.saveHandle = handle; }
+      catch (e) { toast('Opslaan op die plek lukte niet. Ik zet het bestand in je downloads.', true); }
+    } else if (mode === 'share') {
+      try {
+        const f = new File([bytes], saved, { type: 'application/pdf' });
+        if (navigator.canShare({ files: [f] })) { await navigator.share({ files: [f], title: saved }); ok = true; where = ' via delen'; }
+      } catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    if (!ok) ok = await saveFile(saved, bytes);
+    if (ok) {
+      S.name = saved;
       $('#docName').textContent = S.name;
       setDirty(false);
       scheduleSessionSave();
       flyPlane();
-      toast('Opgeslagen als ' + S.name + ' (' + fmtSize(bytes.length) + ')' + (pw.value ? ', beveiligd met je wachtwoord' : ''));
+      toast('Opgeslagen als ' + S.name + ' (' + fmtSize(bytes.length) + ')' + where + (pw.value ? ', beveiligd met je wachtwoord' : ''));
     }
   };
-  name.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
-  const sh = sheet('Opslaan als PDF', body, [h('button', { class: 'btn btn-primary', html: ico('save') + '<span>Sla PDF op</span>', onclick: go })]);
+  name.addEventListener('keydown', e => { if (e.key === 'Enter') go(canPick ? 'pick' : 'download'); });
+  const foot = canPick
+    ? [same ? h('button', { class: 'btn', id: 'saveSame', html: ico('save') + '<span>Opslaan in ' + (same.name || 'hetzelfde bestand') + '</span>', title: 'Overschrijft dit bestand', onclick: () => go('same') })
+        : h('button', { class: 'btn', id: 'saveDown', text: 'Zet in Downloads', onclick: () => go('download') }),
+      h('button', { class: 'btn btn-primary', id: 'savePick', html: ico('save') + '<span>Opslaan als…</span>', onclick: () => go('pick') })]
+    : [canShare ? h('button', { class: 'btn', id: 'saveShare', text: 'Bewaar elders of deel', onclick: () => go('share') }) : null,
+      h('button', { class: 'btn btn-primary', html: ico('save') + '<span>Sla PDF op</span>', onclick: () => go('download') })];
+  if (canPick) body.push(h('p', { class: 'hint', text: same ? '“Opslaan als…” laat je een map en naam kiezen. “Opslaan in ' + (same.name || 'hetzelfde bestand') + '” overschrijft dat bestand.' : 'Met “Opslaan als…” kies je zelf de map en de naam.' }));
+  const sh = sheet('Opslaan', body, foot);
 }
 
 /* ---------- verkleinen, afbeeldingen, tekst, splitsen ---------- */
@@ -753,7 +783,7 @@ function replaceDoc(list, name, extra) {
   clearThumbs();
   S.sources = {}; S.pages = [];
   S.assets = extra.assets || {}; S.fx = extra.fx || { wm: null, num: null, head: null }; S.meta = extra.meta || null;
-  S.sel = null; S.hist = []; S.fut = []; S.outline = extra.outline;
+  S.sel = null; S.hist = []; S.fut = []; S.outline = extra.outline; S.saveHandle = extra.saveHandle || null;
   for (const it of list) { S.sources[it.src.id] = it.src; S.pages.push(...it.pages); }
   S.name = name; S.isExample = !!extra.isExample;
   Q.q = ''; Q.hits = []; Q.cur = -1;
@@ -981,7 +1011,7 @@ function openMenu() {
       item('info', 'Eigenschappen', 'Naam, titel, auteur, leestijd', openProps),
     ]),
     group('Opslaan en exporteren', [
-      item('save', 'Opslaan als PDF', '', openSave),
+      item('save', 'Opslaan of opslaan als', 'Kies zelf de map en de naam', openSave),
       inClaude() ? null : item('print', 'Afdrukken', '', openPrint),
       item('shrink', 'Verkleinen', 'Slim of tot onder een aantal MB', openCompress),
       item('scan', 'Maak er een scan van', 'Alsof het geprint en gescand is', openScanLook),
