@@ -298,6 +298,17 @@ async function guessInvoice() {
   if (amt > 0) out.amount = amt;
   const f = /(?:factuur|invoice)\s*(?:nummer|nr\.?|no\.?|number)?\s*[:#]?\s*([A-Z]{0,5}[-\/]?\d[\w\-\/.]{1,18})/i.exec(text);
   if (f) out.ref = 'Factuur ' + f[1].replace(/[.,]$/, '');
+  // staat er een rekeningnummer op de factuur, dan is dat bijna altijd dat van de afzender
+  const ib = /\b[A-Z]{2}\d{2}(?:[ .]?[A-Z0-9]{4}){2,7}(?:[ .]?[A-Z0-9]{1,3})?\b/g;
+  let m;
+  while ((m = ib.exec(text.toUpperCase()))) {
+    // een te ruim gegrepen stuk steeds een blokje inkorten tot het een geldig nummer is
+    let cand = ibanClean(m[0]);
+    while (cand.length >= 15 && !ibanOk(cand)) cand = cand.slice(0, -1);
+    if (cand.length >= 15) { out.iban = cand; break; }
+  }
+  const tn = /(?:t\.?\s?n\.?\s?v\.?|ten name van)\s*:?\s*((?:[A-ZÀ-Ý0-9][\wÀ-ÿ.&'’-]*\s?){1,6})/.exec(text);
+  if (tn) { const nm = tn[1].replace(/\s+(?:IBAN|BIC|KvK|BTW|Btw|NL\d\d).*$/, '').trim(); if (nm.length >= 3) out.name = nm; }
   return out;
 }
 function epcPayload(o) {
@@ -337,7 +348,16 @@ function openQr() {
   const refresh = () => {
     const v = value();
     prev.textContent = ''; canvas = null;
-    if (!v) prev.append(h('p', { text: st.kind === 'pay' ? (st.iban.trim() && !ibanOk(st.iban) ? 'Dit rekeningnummer klopt niet. Kijk het nog even na.' : 'Vul naam, rekeningnummer en bedrag in.') : st.kind === 'link' ? 'Typ een link of tekst, dan verschijnt de code hier.' : 'Vul de naam van het netwerk in.' }));
+    if (st.kind === 'pay' && st.keep && st.name.trim() && ibanOk(st.iban)) storePay({ name: st.name.trim(), iban: ibanClean(st.iban) });
+    const payHint = () => {
+      const ib = ibanClean(st.iban), miss = [];
+      if (ib && !ibanOk(st.iban)) return /^NL/.test(ib) && ib.length !== 18 ? 'Een Nederlands rekeningnummer heeft 18 tekens. Dit zijn er ' + ib.length + '.' : 'Dit rekeningnummer klopt niet. Kijk de letters en cijfers nog even na.';
+      if (!(parseAmount(st.amount) > 0)) miss.push('het bedrag');
+      if (!st.name.trim()) miss.push('de naam van de rekeninghouder');
+      if (!ib) miss.push('het rekeningnummer');
+      return 'Vul nog in: ' + miss.join(' en ') + '.';
+    };
+    if (!v) prev.append(h('p', { text: st.kind === 'pay' ? payHint() : st.kind === 'link' ? 'Typ een link of tekst, dan verschijnt de code hier.' : 'Vul de naam van het netwerk in.' }));
     else {
       try { canvas = st.kind === 'pay' ? payCanvas({ name: st.name, iban: st.iban, amount: parseAmount(st.amount), ref: st.ref }) : qrCanvas(v, 720); prev.append(canvas); }
       catch (e) { prev.append(h('p', { text: 'Dit is te veel tekst voor één QR-code. Maak het korter.' })); }
@@ -355,11 +375,11 @@ function openQr() {
     form.append(h('div', { class: 'field' }, h('span', { text: 'Wat zit erin?' }), chips([['pay', 'Betalen'], ['link', 'Link of tekst'], ['wifi', 'Wifi']], st.kind, v => { st.kind = v; draw(); })));
     if (st.kind === 'pay') {
       const keep = h('input', { type: 'checkbox', id: 'qrKeep', checked: st.keep });
-      keep.addEventListener('change', () => { st.keep = keep.checked; });
+      keep.addEventListener('change', () => { st.keep = keep.checked; if (!st.keep) storePay(null); refresh(); });
       form.append(field('qrAmount', 'Bedrag in euro', 'amount', { ph: '0,00', mode: 'decimal' }), field('qrRef', 'Omschrijving', 'ref', { ph: 'Factuur 2026-001' }),
         field('qrName', 'Naam van de rekeninghouder', 'name'), field('qrIban', 'Rekeningnummer (IBAN)', 'iban', { ph: 'NL00 BANK 0000 0000 00' }),
         h('label', { class: 'check', for: 'qrKeep' }, keep, h('span', null, 'Bewaar naam en rekeningnummer op dit apparaat', h('br'), h('span', { class: 'hint', text: 'Ze blijven in deze app op dit apparaat en gaan nergens heen.' }))),
-        h('p', { class: 'hint', text: (st.guessed ? 'Bedrag en omschrijving heb ik uit het document gehaald. Kijk ze na. ' : '') + 'Wie de code scant met zijn bank-app krijgt de overschrijving kant-en-klaar. Dat werkt bij onder meer ING, maar nog niet bij elke bank; daarom staan de gegevens er ook leesbaar onder.' }));
+        h('p', { class: 'hint', text: (st.guessed || st.fromDoc ? (st.fromDoc ? 'Bedrag, omschrijving en rekeningnummer' : 'Bedrag en omschrijving') + ' heb ik uit het document gehaald. Kijk ze na. ' : '') + 'Wie de code scant met zijn bank-app krijgt de overschrijving kant-en-klaar. Dat werkt bij onder meer ING, maar nog niet bij elke bank; daarom staan de gegevens er ook leesbaar onder.' }));
     } else if (st.kind === 'link') form.append(field('qrLink', 'Link of tekst', 'link', { area: true, ph: 'https://…' }));
     else {
       form.append(field('qrSsid', 'Naam van het netwerk', 'ssid'),
@@ -385,10 +405,11 @@ function openQr() {
   const sh = sheet('QR-code maken', [h('div', { class: 'qr-wrap' }, form, prev)], [btnSave, btnPlace]);
   // staat er een bedrag in het document, dan is het waarschijnlijk een factuur: meteen de betaalcode klaarzetten
   guessInvoice().then(g => {
-    if (!sh.el.isConnected || !(g.amount > 0) || st.amount || st.link || st.ssid) return;
-    st.amount = g.amount.toFixed(2).replace('.', ','); st.ref = g.ref || ''; st.guessed = true;
-    if (st.kind === 'link') st.kind = 'pay';
-    draw();
+    if (!sh.el.isConnected || st.link || st.ssid) return;
+    let hit = false;
+    if (g.amount > 0 && !st.amount) { st.amount = g.amount.toFixed(2).replace('.', ','); if (!st.ref) st.ref = g.ref || ''; st.guessed = true; hit = true; if (st.kind === 'link') st.kind = 'pay'; }
+    if (g.iban && !st.iban.trim()) { st.iban = g.iban.replace(/(.{4})/g, '$1 ').trim(); st.fromDoc = true; hit = true; if (g.name && !st.name.trim()) st.name = g.name; }
+    if (hit) draw();
   }).catch(() => {});
 }
 
