@@ -688,7 +688,7 @@ async function rebake(label, edit, done) {
   if (done) done();
   return true;
 }
-const hasMarks = () => S.pages.some(p => p.annots.length) || !!(S.fx && (S.fx.wm || S.fx.num || S.fx.head));
+const hasMarks = () => S.pages.some(p => p.annots.length) || !!(S.fx && (S.fx.wm || S.fx.num || S.fx.head || S.fx.bg));
 
 /* ---------- bijsnijden ---------- */
 async function openCrop() {
@@ -804,29 +804,51 @@ function placeBox(a, w, hh) {
   commit();
   return a;
 }
-function openFieldAdd() {
-  let kind = 'text';
+function openFieldAdd(ex) {
+  ex = ex && ex.t === 'field' ? ex : null;
+  let kind = ex ? ex.kind : 'text';
   const n = S.pages.reduce((s, p) => s + p.annots.filter(a => a.t === 'field').length, 0) + 1;
-  const name = h('input', { class: 'input', id: 'fldName', type: 'text', value: 'Veld ' + n, autocomplete: 'off' });
-  const row = h('div');
-  const draw = () => { row.textContent = ''; row.append(chips([['text', 'Tekstregel'], ['multi', 'Groot tekstvak'], ['check', 'Aankruisvakje']], kind, v => { kind = v; draw(); })); };
+  const name = h('input', { class: 'input', id: 'fldName', type: 'text', value: ex ? ex.name : 'Veld ' + n, autocomplete: 'off' });
+  const opts = h('textarea', { class: 'input', id: 'fldOpts', rows: 4, placeholder: 'Eén keuze per regel' });
+  opts.value = ex && ex.opts ? ex.opts.join('\n') : '';
+  const row = h('div'), extra = h('div');
+  const draw = () => {
+    row.textContent = '';
+    row.append(h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap' } }, [['text', 'Tekstregel'], ['multi', 'Groot tekstvak'], ['check', 'Aankruisvakje'], ['choice', 'Keuzelijst'], ['date', 'Datum']].map(o =>
+      h('button', { class: 'chip', 'aria-pressed': String(kind === o[0]), text: o[1], onclick: () => { kind = o[0]; draw(); } }))));
+    extra.textContent = '';
+    if (kind === 'choice') extra.append(h('div', { class: 'field' }, h('label', { for: 'fldOpts', text: 'Keuzes' }), opts));
+    if (kind === 'date') extra.append(h('p', { class: 'hint', text: 'De invuller typt een datum als dag-maand-jaar. Pdf-lezers die dat ondersteunen controleren de schrijfwijze.' }));
+  };
   draw();
-  const sh = sheet('Invulveld toevoegen', [
+  const sh = sheet(ex ? 'Invulveld bewerken' : 'Invulveld toevoegen', [
     h('div', { class: 'field' }, h('span', { text: 'Soort veld' }), row),
-    h('div', { class: 'field' }, h('label', { for: 'fldName', text: 'Naam van het veld' }), name),
-    h('p', { class: 'hint', text: 'Het veld komt als blauw vak op de pagina. Sleep het op zijn plek en maak het op maat. Na het opslaan kan iedereen het invullen in zijn eigen pdf-lezer.' })],
-  [h('button', { class: 'btn btn-primary', html: ico('field') + '<span>Zet op de pagina</span>', onclick: () => {
-    const nm = name.value.trim() || 'Veld ' + n;
+    h('div', { class: 'field' }, h('label', { for: 'fldName', text: 'Naam van het veld' }), name), extra,
+    h('p', { class: 'hint', text: 'Het veld staat als blauw vak op de pagina. Sleep het op zijn plek en maak het op maat. Na het opslaan kan iedereen het invullen in zijn eigen pdf-lezer.' })],
+  [h('button', { class: 'btn btn-primary', html: ico('field') + '<span>' + (ex ? 'Pas aan' : 'Zet op de pagina') + '</span>', onclick: () => {
+    const nm = name.value.trim() || 'Veld ' + n, list = opts.value.split('\n').map(v => v.trim()).filter(Boolean);
+    if (kind === 'choice' && list.length < 2) { toast('Geef minstens twee keuzes, elk op een eigen regel.', true); return; }
     sh.close();
-    placeBox({ t: 'field', kind, name: nm }, kind === 'check' ? 16 : kind === 'multi' ? 260 : 190, kind === 'check' ? 16 : kind === 'multi' ? 72 : 22);
-    toast('Veld geplaatst. Sleep het op zijn plek.');
+    if (ex) {
+      const f = findAnnot(ex.id);
+      Object.assign(ex, { kind, name: nm, opts: kind === 'choice' ? list : undefined });
+      if (kind === 'check') ex.h = ex.w = Math.min(ex.w, ex.h, 22);
+      if (f) drawAnnots(f.p);
+      commit(); updateStrip();
+      toast('Veld aangepast.');
+    } else {
+      placeBox(Object.assign({ t: 'field', kind, name: nm }, kind === 'choice' ? { opts: list } : null), kind === 'check' ? 16 : kind === 'multi' ? 260 : kind === 'date' ? 110 : 190, kind === 'check' ? 16 : kind === 'multi' ? 72 : 22);
+      toast('Veld geplaatst. Sleep het op zijn plek.');
+    }
   } })]);
   setTimeout(() => { name.focus(); name.select(); }, 60);
 }
-function openLinkAdd() {
-  let kind = 'url';
-  const url = h('input', { class: 'input', id: 'lnkUrl', type: 'url', placeholder: 'https://…', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
-  const pageNo = h('input', { class: 'input', id: 'lnkPage', type: 'number', min: 1, max: S.pages.length, value: Math.min(S.pages.length, curIndex() + 2) });
+function openLinkAdd(ex) {
+  ex = ex && ex.t === 'link' ? ex : null;
+  let kind = ex && !ex.url ? 'page' : 'url';
+  const url = h('input', { class: 'input', id: 'lnkUrl', type: 'url', placeholder: 'https://…', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', value: ex && ex.url ? ex.url : '' });
+  const curNo = ex && ex.page ? S.pages.findIndex(p => p.id === ex.page) + 1 : 0;
+  const pageNo = h('input', { class: 'input', id: 'lnkPage', type: 'number', min: 1, max: S.pages.length, value: curNo || Math.min(S.pages.length, curIndex() + 2) });
   const body = h('div', { style: { display: 'grid', gap: '12px' } });
   const draw = () => {
     body.textContent = '';
@@ -834,8 +856,8 @@ function openLinkAdd() {
       kind === 'url' ? h('div', { class: 'field' }, h('label', { for: 'lnkUrl', text: 'Adres' }), url) : h('div', { class: 'field' }, h('label', { for: 'lnkPage', text: 'Paginanummer (1 tot ' + S.pages.length + ')' }), pageNo));
   };
   draw();
-  const sh = sheet('Link toevoegen', [body, h('p', { class: 'hint', text: 'De link komt als paars vak op de pagina. Leg het over de tekst of het plaatje dat moet werken als link. In de opgeslagen PDF is het vak onzichtbaar.' })],
-  [h('button', { class: 'btn btn-primary', html: ico('link') + '<span>Zet op de pagina</span>', onclick: () => {
+  const sh = sheet(ex ? 'Link bewerken' : 'Link toevoegen', [body, h('p', { class: 'hint', text: 'De link staat als paars vak op de pagina. Leg het over de tekst of het plaatje dat moet werken als link. In de opgeslagen PDF is het vak onzichtbaar.' })],
+  [h('button', { class: 'btn btn-primary', html: ico('link') + '<span>' + (ex ? 'Pas aan' : 'Zet op de pagina') + '</span>', onclick: () => {
     const a = { t: 'link' };
     if (kind === 'url') {
       let u = url.value.trim();
@@ -849,8 +871,18 @@ function openLinkAdd() {
       a.page = S.pages[k - 1].id;
     }
     sh.close();
-    placeBox(a, 150, 20);
-    toast('Link geplaatst. Leg het vak over de tekst die moet werken als link.');
+    if (ex) {
+      const f = findAnnot(ex.id);
+      ex.url = a.url; ex.page = a.page;
+      if (!ex.url) delete ex.url;
+      if (!ex.page) delete ex.page;
+      if (f) drawAnnots(f.p);
+      commit(); updateStrip();
+      toast('Link aangepast.');
+    } else {
+      placeBox(a, 150, 20);
+      toast('Link geplaatst. Leg het vak over de tekst die moet werken als link.');
+    }
   } })]);
 }
 /* Wordt door buildPdf aangeroepen als alle pagina's staan: maakt van de vakken echte velden en links, en schrijft de bladwijzers. */
@@ -874,11 +906,21 @@ function finishExtras(out, built) {
         names.add(nm);
         const r = rectOf(a, b.T), opt = { x: r[0], y: r[1], width: r[2] - r[0], height: r[3] - r[1], borderWidth: 0.75, borderColor: L.rgb(0.42, 0.47, 0.56), backgroundColor: L.rgb(0.97, 0.98, 1) };
         if (a.kind === 'check') form.createCheckBox(nm).addToPage(b.page, opt);
-        else {
+        else if (a.kind === 'choice') {
+          const dd = form.createDropdown(nm);
+          dd.addOptions(a.opts && a.opts.length ? a.opts.map(safeText) : ['']);
+          dd.addToPage(b.page, opt);
+          dd.setFontSize(clamp(Math.round(opt.height * 0.55), 7, 12));
+        } else {
           const tf = form.createTextField(nm);
           if (a.kind === 'multi') tf.enableMultiline();
           tf.addToPage(b.page, opt);
           tf.setFontSize(a.kind === 'multi' ? 10 : clamp(Math.round(Math.min(opt.width, opt.height) * 0.55), 7, 12));
+          if (a.kind === 'date') {
+            const js = code => cx.obj({ Type: 'Action', S: 'JavaScript', JS: L.PDFString.of(code) });
+            tf.acroField.dict.set(L.PDFName.of('AA'), cx.obj({ F: js('AFDate_FormatEx("dd-mm-yyyy");'), K: js('AFDate_KeystrokeEx("dd-mm-yyyy");') }));
+            tf.acroField.dict.set(L.PDFName.of('TU'), L.PDFHexString.fromText('Datum als dd-mm-jjjj'));
+          }
         }
       } catch (e) { console.warn('veld overgeslagen', e); }
     } else if (a.t === 'link' || (a.t === 'img' && a.url)) {
@@ -1017,11 +1059,13 @@ async function openOcr() {
   const n = todo.length, tot = S.pages.length;
   const sh = sheet('Maak scan doorzoekbaar', [
     h('p', { text: (n === tot ? (n === 1 ? 'Deze pagina is' : 'Alle ' + n + " pagina's zijn") : n + ' van de ' + tot + " pagina's " + (n === 1 ? 'is' : 'zijn')) + ' een scan zonder echte tekst. Ik lees de tekst en leg die onzichtbaar onder de pagina. Daarna kun je zoeken, selecteren, kopiëren, laten voorlezen en persoonsgegevens laten zwartlakken.' }),
-    h('p', { class: 'hint', text: 'Het lezen gebeurt op je eigen apparaat, er wordt niets verstuurd. Reken op een paar seconden tot een halve minuut per pagina. De eerste keer wordt de leesmachine opgehaald (ongeveer 9 MB); daarna werkt het ook zonder internet. Gedrukte tekst gaat goed, handschrift meestal niet. Staat een pagina op zijn kant, draai hem dan eerst rechtop.' + (hasMarks() ? ' Je aantekeningen worden hierbij vastgezet in de pagina.' : '') })],
+    h('p', { class: 'hint', text: 'Het lezen gebeurt op je eigen apparaat, er wordt niets verstuurd. Reken op een paar seconden tot een halve minuut per pagina. De eerste keer wordt de leesmachine opgehaald (ongeveer 9 MB); daarna werkt het ook zonder internet. Gedrukte tekst gaat goed, handschrift meestal niet. Een pagina die op zijn kant of op zijn kop staat, zet ik eerst rechtop.' + (hasMarks() ? ' Je aantekeningen worden hierbij vastgezet in de pagina.' : '') })],
   [h('button', { class: 'btn btn-primary', html: ico('search') + '<span>Lees ' + (n === 1 ? 'de pagina' : n + " pagina's") + '</span>', onclick: async () => {
     sh.close();
-    let words = 0, read = 0;
+    let words = 0, read = 0, turned = 0;
     const first = todo[0];
+    busy('Kijken of de pagina\'s rechtop staan');
+    try { turned = await ocrFixRotation(todo); } catch (e) { console.warn(e); } finally { busyOff(); }
     const ok = await rebake('Tekst herkennen', async (bytes, prog) => {
       const d = await PDFLib.PDFDocument.load(bytes, { updateMetadata: false }), js = await pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
       const font = await d.embedFont(PDFLib.StandardFonts.Helvetica);
@@ -1053,7 +1097,7 @@ async function openOcr() {
       if (!words) throw new Error(n === 1 ? 'Op deze pagina vond ik geen leesbare tekst.' : "Op deze pagina's vond ik geen leesbare tekst.");
       return await d.save();
     }, () => goToPage(first));
-    if (ok) toast(read + (read === 1 ? ' pagina is' : " pagina's zijn") + ' nu doorzoekbaar (' + words + ' woorden herkend). Probeer het zoeken of Lees voor.');
+    if (ok) toast(read + (read === 1 ? ' pagina is' : " pagina's zijn") + ' nu doorzoekbaar (' + words + ' woorden herkend)' + (turned ? ', ' + turned + (turned === 1 ? ' pagina is' : " pagina's zijn") + ' rechtop gezet' : '') + '. Probeer het zoeken of Lees voor.');
   } })]);
 }
 
@@ -1117,10 +1161,11 @@ async function openDoc(files) {
   files = Array.from(files || []);
   if (!files.length) return;
   // via Openen met op de computer komt het bestand zelf mee; dan kan Opslaan het later overschrijven
-  await inNewTab(async () => { await openDocHere(files); if (S.pages.length && files.length === 1 && files[0].handle) S.saveHandle = files[0].handle; });
+  await inNewTab(async () => { await openDocHere(files); if (S.pages.length && files.length === 1) { if (files[0].handle) S.saveHandle = files[0].handle; addRecent(files[0]); } });
 }
 function switchTab(i) {
   if (i === DOCS.cur || !DOCS.list[i]) return;
+  if (BESIDE.doc === DOCS.list[i]) closeBeside();
   DOCS.list[DOCS.cur] = stashDoc();
   const d = DOCS.list[i];
   DOCS.list[i] = null; DOCS.cur = i;
@@ -1158,3 +1203,398 @@ function renderTabs() {
   window.setDirty = function (v) { base(v); const now = S.dirty + '|' + S.name; if (now !== last && DOCS.list.length > 1) { last = now; renderTabs(); } };
 }
 window.addEventListener('beforeunload', e => { if ((S.dirty && !S.isExample && DOCS.list.length > 1) || DOCS.list.some(d => d && d.dirty)) { e.preventDefault(); e.returnValue = ''; } });
+
+/* ================================================================
+   Van mij: recent geopend, stempels en logo, briefpapier, eigen gegevens, instellingen meenemen
+   ================================================================ */
+document.head.append(h('style', { text: `
+.rec-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--raised); color: var(--ink); border-radius: var(--r-m, 10px); padding: 10px 12px; cursor: pointer; font: inherit; }
+.rec-row:hover { border-color: var(--accent); }
+.rec-row b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec-row small { color: var(--muted); font-size: 13px; grid-column: 1; }
+.tile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+.tile { position: relative; border: 1px solid var(--line); border-radius: var(--r-m, 10px); background: #fff; height: 84px; padding: 8px; display: grid; place-items: center; cursor: pointer; }
+.tile:hover { border-color: var(--accent); }
+.tile img { max-width: 100%; max-height: 66px; object-fit: contain; }
+.tile .x { position: absolute; top: -9px; right: -9px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; display: grid; place-items: center; padding: 0; }
+.tile .x svg { width: 12px; height: 12px; }
+.mine-row { display: grid; grid-template-columns: minmax(90px, 32%) 1fr auto; gap: 8px; align-items: center; }
+.mine-row label { font-size: 14px; color: var(--muted); }
+@media (max-width: 520px) { .mine-row { grid-template-columns: 1fr auto; } .mine-row label { grid-column: 1 / -1; margin-bottom: -4px; } }
+` }));
+const fmtAgo = t => { const m = Math.round((Date.now() - t) / 60000); return m < 2 ? 'zojuist' : m < 60 ? m + ' minuten geleden' : m < 1440 ? Math.round(m / 60) + ' uur geleden' : m < 2880 ? 'gisteren' : new Date(t).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long' }); };
+
+/* ---------- recent geopend ---------- */
+async function addRecent(file) {
+  try {
+    if (!file || file.size > 30e6 || !/\.pdf$/i.test(file.name || '')) return;
+    const list = ((await IDB.get('recents')) || []).filter(r => !(r.name === file.name && r.size === file.size));
+    const id = uid();
+    await IDB.set('recent:' + id, new Uint8Array(await file.arrayBuffer()));
+    list.unshift({ id, name: file.name, size: file.size, when: Date.now() });
+    for (const r of list.splice(8)) await IDB.del('recent:' + r.id);
+    await IDB.set('recents', list);
+    // weggevallen dubbelen opruimen
+    const keep = new Set(list.map(r => 'recent:' + r.id));
+    for (const k of (await IDB.keys()) || []) if (typeof k === 'string' && k.startsWith('recent:') && !keep.has(k)) await IDB.del(k);
+  } catch (e) {}
+}
+async function openRecent() {
+  const list = (await IDB.get('recents')) || [];
+  const rows = h('div', { style: { display: 'grid', gap: '8px' } });
+  const sh = sheet('Recent geopend', [rows, h('p', { class: 'hint', text: 'Deze lijst en de bestanden erin staan alleen op dit apparaat.' })],
+    list.length ? [h('button', { class: 'btn', text: 'Wis de lijst', onclick: async () => { for (const r of list) await IDB.del('recent:' + r.id); await IDB.del('recents'); sh.close(); toast('De lijst is gewist.'); } })] : null);
+  if (!list.length) rows.append(h('p', { text: 'Nog niets. De pdf\'s die je opent komen hier te staan.' }));
+  for (const r of list) rows.append(h('button', { class: 'rec-row', onclick: async () => {
+    const bytes = await IDB.get('recent:' + r.id);
+    if (!bytes) { toast('Dit bestand is niet meer bewaard.', true); return; }
+    sh.close();
+    const at = DOCS.list.findIndex((d, i) => (i === DOCS.cur ? S.name : d.name) === r.name);
+    if (at >= 0) { switchTab(at); return; }
+    openDoc([new File([bytes], r.name, { type: 'application/pdf' })]);
+  } }, h('b', { text: r.name }), h('small', { text: fmtSize(r.size) + ', ' + fmtAgo(r.when) })));
+}
+
+/* ---------- mijn stempels en logo ---------- */
+const STAMP_KEY = 'papierwerk.stempels';
+function loadStamps() { try { return JSON.parse(localStorage.getItem(STAMP_KEY) || '[]'); } catch (e) { return []; } }
+function storeStamps(l) { try { localStorage.setItem(STAMP_KEY, JSON.stringify(l.slice(0, 8))); return true; } catch (e) { return false; } }
+function companyStamp(l1, l2, col) {
+  const c = document.createElement('canvas'), x = c.getContext('2d'), fam = ' Figtree, Arial, sans-serif';
+  x.font = '800 64px' + fam; const w1 = x.measureText(l1).width;
+  x.font = '600 34px' + fam; const w2 = l2 ? x.measureText(l2).width : 0;
+  c.width = Math.ceil(Math.max(w1, w2) + 110); c.height = l2 ? 210 : 150;
+  const g = c.getContext('2d');
+  g.strokeStyle = col; g.fillStyle = col; g.lineJoin = 'round';
+  const rr = (m, r, lw) => { g.lineWidth = lw; g.beginPath(); g.roundRect(m, m, c.width - 2 * m, c.height - 2 * m, r); g.stroke(); };
+  rr(7, 22, 9); rr(21, 12, 3);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '800 64px' + fam; g.fillText(l1, c.width / 2, l2 ? 86 : c.height / 2 + 3);
+  if (l2) { g.font = '600 34px' + fam; g.fillText(l2, c.width / 2, 148); }
+  return c;
+}
+function openMyStamps() {
+  const list = loadStamps(), grid = h('div', { class: 'tile-grid' });
+  const place = s => { sh.close(); placeAsset(s.url, s.w, s.h, 150); toast('Geplaatst. Sleep hem op zijn plek.'); };
+  const draw = () => {
+    grid.textContent = '';
+    if (!list.length) grid.append(h('p', { class: 'hint', style: { gridColumn: '1 / -1' }, text: 'Nog niets bewaard. Voeg je logo toe of maak hieronder een bedrijfsstempel.' }));
+    list.forEach((s, i) => grid.append(h('div', { class: 'tile', role: 'button', tabindex: 0, title: 'Zet op de pagina', onclick: () => place(s) },
+      h('img', { src: s.url, alt: s.name || 'Stempel ' + (i + 1) }),
+      h('button', { class: 'x', 'aria-label': 'Verwijder', html: ico('close'), onclick: e => { e.stopPropagation(); list.splice(i, 1); storeStamps(list); draw(); } }))));
+  };
+  const add = s => { list.unshift(s); if (!storeStamps(list)) { list.shift(); toast('Bewaren lukte niet; er is te weinig ruimte op dit apparaat.', true); } draw(); };
+  const l1 = h('input', { class: 'input', id: 'stL1', type: 'text', placeholder: 'Bedrijfsnaam', autocomplete: 'off' }), l2 = h('input', { class: 'input', id: 'stL2', type: 'text', placeholder: 'Tweede regel (mag leeg)', autocomplete: 'off' });
+  let col = '#1F4FD1';
+  const cols = h('div');
+  const drawCols = () => { cols.textContent = ''; cols.append(chips([['#1F4FD1', 'Blauw'], ['#D7263D', 'Rood'], ['#1B7446', 'Groen'], ['#17202B', 'Zwart']], col, v => { col = v; drawCols(); })); };
+  drawCols(); draw();
+  const sh = sheet('Mijn stempels en logo', [grid,
+    h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap' } }, h('button', { class: 'btn', html: ico('image') + '<span>Voeg logo of afbeelding toe</span>', onclick: async () => {
+      const f = (await pickFile('image/*'))[0];
+      if (!f) return;
+      try { const as = await fileToAsset(f, 700, true); add({ url: as.url, w: as.w, h: as.h, name: f.name }); } catch (e) { toast(e.message || 'De afbeelding kon niet worden geladen.', true); }
+    } })),
+    h('div', { class: 'field' }, h('label', { for: 'stL1', text: 'Bedrijfsstempel maken' }), l1, l2, cols),
+    h('p', { class: 'hint', text: 'Alles blijft op dit apparaat bewaard. Tik op een stempel om hem op de pagina te zetten.' })],
+  [h('button', { class: 'btn btn-primary', html: ico('stamp') + '<span>Maak stempel</span>', onclick: () => {
+    const a = l1.value.trim();
+    if (!a) { toast('Vul eerst een naam in.', true); return; }
+    const c = companyStamp(a, l2.value.trim(), col);
+    add({ url: c.toDataURL('image/png'), w: c.width, h: c.height, name: a });
+    l1.value = ''; l2.value = '';
+  } })], { wide: true });
+}
+
+/* ---------- briefpapier ---------- */
+async function letterheadFrom(file) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const c = document.createElement('canvas');
+  if (isPdfBytes(buf) || /\.pdf$/i.test(file.name)) {
+    const doc = await openPdfJs(buf, file.name);
+    try {
+      const pg = await doc.getPage(1), v1 = pg.getViewport({ scale: 1 }), vp = pg.getViewport({ scale: 1654 / v1.width });
+      c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+      const x = c.getContext('2d', { alpha: false });
+      x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+      await pg.render({ canvasContext: x, viewport: vp }).promise;
+    } finally { try { doc.destroy(); } catch (e) {} }
+  } else {
+    const bm = await loadBitmap(file), k = Math.min(1, 1654 / bm.width);
+    c.width = Math.round(bm.width * k); c.height = Math.round(bm.height * k);
+    const x = c.getContext('2d', { alpha: false });
+    x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(bm, 0, 0, c.width, c.height);
+  }
+  return { url: c.toDataURL('image/jpeg', 0.88), w: c.width, h: c.height };
+}
+async function openLetterhead() {
+  let lh = await IDB.get('briefpapier'), first = !!(S.fx.bg && S.fx.bg.first);
+  const body = h('div', { style: { display: 'grid', gap: '12px' } });
+  const apply = () => {
+    const id = uid();
+    S.assets[id] = { url: lh.url, w: lh.w, h: lh.h };
+    S.fx.bg = { asset: id, first };
+    drawAll(); clearThumbs(); renderSidebar(); commit();
+  };
+  const draw = () => {
+    body.textContent = '';
+    if (!lh) body.append(h('p', { text: 'Kies één keer je briefpapier: een pdf of afbeelding van een lege pagina met je logo en gegevens. Daarna leg je het met één tik achter elk document.' }));
+    else body.append(h('div', { class: 'tile', style: { height: '150px', cursor: 'default' } }, h('img', { src: lh.url, alt: 'Je briefpapier', style: { maxHeight: '132px' } })),
+      h('div', { class: 'field' }, h('span', { text: 'Op welke pagina\'s?' }), chips([[false, "Alle pagina's"], [true, 'Alleen de eerste']], first, v => { first = v; draw(); })));
+    body.append(h('p', { class: 'hint', text: 'Het briefpapier komt achter de tekst te liggen. Dat werkt het mooist bij documenten met een witte achtergrond. Het blijft op dit apparaat bewaard.' }));
+    foot.textContent = '';
+    foot.append(h('button', { class: 'btn', text: lh ? 'Ander briefpapier' : 'Kies je briefpapier', onclick: async () => {
+      const f = (await pickFile('application/pdf,.pdf,image/*'))[0];
+      if (!f) return;
+      busy('Briefpapier laden');
+      try { lh = await letterheadFrom(f); await IDB.set('briefpapier', lh); } catch (e) { if (!e || e.message !== 'cancel') toast('Dit bestand kon niet als briefpapier worden geladen.', true); }
+      finally { busyOff(); }
+      draw();
+    } }));
+    if (S.fx.bg) foot.append(h('button', { class: 'btn', text: 'Haal weg uit dit document', onclick: () => { S.fx.bg = null; drawAll(); clearThumbs(); renderSidebar(); commit(); sh.close(); toast('Briefpapier weggehaald.'); } }));
+    if (lh) foot.append(h('button', { class: 'btn btn-primary', html: ico('blank') + '<span>Leg achter dit document</span>', onclick: () => { apply(); sh.close(); toast('Briefpapier ligt erachter.'); } }));
+  };
+  const foot = h('div', { style: { display: 'contents' } });
+  const sh = sheet('Briefpapier', [body], [foot]);
+  draw();
+}
+
+/* ---------- mijn gegevens ---------- */
+const MINE_KEY = 'papierwerk.gegevens';
+function loadMine() {
+  let l = null;
+  try { l = JSON.parse(localStorage.getItem(MINE_KEY) || 'null'); } catch (e) {}
+  return Array.isArray(l) && l.length ? l : ['Naam', 'Bedrijf', 'Adres', 'Postcode en plaats', 'Telefoon', 'E-mail', 'KvK-nummer', 'Btw-nummer'].map(label => ({ label, value: '' }));
+}
+function storeMine(l) { try { localStorage.setItem(MINE_KEY, JSON.stringify(l)); } catch (e) {} }
+function placeText(text) {
+  const i = curIndex(), p = S.pages[i];
+  if (!p) return null;
+  const rt = RT.get(p.id), pr = rt.el.getBoundingClientRect(), vr = viewer.getBoundingClientRect(), st = S.style.text;
+  const cxp = (Math.max(pr.left, vr.left) + Math.min(pr.right, vr.right)) / 2, cyp = (Math.max(pr.top, vr.top) + Math.min(pr.bottom, vr.bottom)) / 2;
+  const a = { id: uid(), t: 'text', text, fs: st.fs, c: st.c, font: st.font, bold: st.bold, rot: 0, fixed: false, w: 24, h: st.fs * 1.25 + 4, cx: 0, cy: 0 };
+  layoutText(a, p);
+  a.cx = clamp((cxp - pr.left) / pr.width * viewW(p), a.w / 2 + 4, viewW(p) - a.w / 2 - 4); a.cy = clamp((cyp - pr.top) / pr.height * viewH(p), 12, viewH(p) - 12);
+  p.annots.push(a);
+  setTool('select', true);
+  drawAnnots(p);
+  setSel(a.id);
+  commit();
+  return a;
+}
+function openMine() {
+  const list = loadMine(), rows = h('div', { style: { display: 'grid', gap: '10px' } });
+  list.forEach((r, i) => {
+    const inp = h('input', { class: 'input', id: 'mine' + i, type: 'text', value: r.value, autocomplete: 'off' });
+    inp.addEventListener('input', () => { r.value = inp.value; storeMine(list); });
+    rows.append(h('div', { class: 'mine-row' }, h('label', { for: 'mine' + i, text: r.label }), inp,
+      h('button', { class: 'btn', 'aria-label': 'Zet ' + r.label + ' op de pagina', text: 'Zet neer', onclick: () => {
+        if (!r.value.trim()) { toast('Vul eerst iets in bij ' + r.label + '.', true); return; }
+        sh.close(); placeText(r.value.trim()); toast(r.label + ' staat op de pagina. Sleep het naar de juiste regel.');
+      } })));
+  });
+  const sh = sheet('Mijn gegevens', [h('p', { text: 'Vul je gegevens één keer in. Met “Zet neer” komt de tekst op de pagina, bijvoorbeeld op een formulier zonder invulvelden.' }), rows,
+    h('p', { class: 'hint', text: 'Je gegevens blijven in deze app op dit apparaat en gaan nergens heen.' })], null, { wide: true });
+}
+
+/* ---------- instellingen meenemen ---------- */
+function openTransfer() {
+  const sh = sheet('Instellingen meenemen', [
+    h('p', { text: 'Zet alles wat je in Papierwerk hebt bewaard in één bestand en lees dat in op je andere apparaat: handtekeningen, betaalgegevens, stempels en logo, je gegevens en je briefpapier.' }),
+    h('p', { class: 'hint', text: 'In dit bestand staan je handtekening en je rekeningnummer. Stuur het alleen naar jezelf en gooi het daarna weg.' })],
+  [h('button', { class: 'btn', html: ico('open') + '<span>Lees bestand in</span>', onclick: async () => {
+    const f = (await pickFile('application/json,.json'))[0];
+    if (!f) return;
+    try {
+      const o = JSON.parse(await f.text());
+      if (!o || o.app !== 'papierwerk') throw new Error('x');
+      const got = [];
+      if (Array.isArray(o.handtekeningen) && o.handtekeningen.length) { const cur = loadSigs(), urls = new Set(cur.map(s => s.url)); storeSigs(o.handtekeningen.filter(s => s && s.url && !urls.has(s.url)).concat(cur)); got.push('handtekeningen'); }
+      if (o.betaal && o.betaal.iban) { storePay({ name: String(o.betaal.name || ''), iban: ibanClean(o.betaal.iban) }); got.push('betaalgegevens'); }
+      if (Array.isArray(o.stempels) && o.stempels.length) { const cur = loadStamps(), urls = new Set(cur.map(s => s.url)); storeStamps(o.stempels.filter(s => s && s.url && !urls.has(s.url)).concat(cur)); got.push('stempels'); }
+      if (Array.isArray(o.gegevens) && o.gegevens.some(r => r && r.value)) { storeMine(o.gegevens.map(r => ({ label: String(r.label || ''), value: String(r.value || '') }))); got.push('je gegevens'); }
+      if (o.briefpapier && o.briefpapier.url) { await IDB.set('briefpapier', o.briefpapier); got.push('briefpapier'); }
+      sh.close();
+      toast(got.length ? 'Ingelezen: ' + got.join(', ') + '.' : 'In dit bestand stond niets om in te lezen.');
+    } catch (e) { toast('Dit is geen instellingenbestand van Papierwerk.', true); }
+  } }),
+  h('button', { class: 'btn btn-primary', html: ico('save') + '<span>Maak bestand</span>', onclick: async () => {
+    const o = { app: 'papierwerk', v: 1, gemaakt: new Date().toISOString().slice(0, 10), handtekeningen: loadSigs(), betaal: loadPay(), stempels: loadStamps(), gegevens: loadMine(), briefpapier: (await IDB.get('briefpapier')) || null };
+    const bytes = new TextEncoder().encode(JSON.stringify(o));
+    if (await saveFile('papierwerk-instellingen.json', bytes)) { sh.close(); toast('Bestand gemaakt (' + fmtSize(bytes.length) + '). Zet het op je andere apparaat en kies daar “Lees bestand in”.'); }
+  } })]);
+}
+
+/* ---------- tekstherkenning: pagina's die op hun kant of kop staan eerst rechtop zetten ---------- */
+async function ocrFixRotation(todo) {
+  let turned = 0;
+  for (let k = 0; k < todo.length; k++) {
+    const p = S.pages[todo[k]], pg = await getPg(S.sources[p.src], p.idx), base = (pg.rotate + p.rot) % 360, v1 = pg.getViewport({ scale: 1 });
+    const score = async extra => {
+      const vp = pg.getViewport({ scale: Math.min(2.2, 1100 / Math.max(v1.width, v1.height)), rotation: (base + extra) % 360 }), c = document.createElement('canvas');
+      c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+      const x = c.getContext('2d', { alpha: false });
+      x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+      await pg.render({ canvasContext: x, viewport: vp }).promise;
+      const res = await Leesmachine.recognize(c, {});
+      c.width = c.height = 0;
+      let n = 0;
+      for (const w of res.words || []) if (w.conf >= 70 && /[A-Za-zÀ-ÿ]{3,}/.test(w.text || '')) n += w.text.length;
+      return n;
+    };
+    busy('Kijken of pagina ' + (todo[k] + 1) + ' rechtop staat', k / todo.length);
+    const s0 = await score(0);
+    if (s0 >= 60) continue;                      // genoeg goed leesbare woorden: staat goed
+    let best = 0, bs = s0;
+    for (const ex of [90, 270, 180]) { const sc = await score(ex); if (sc > bs * 2 + 20) { bs = sc; best = ex; } }
+    if (best) { for (let q = 0; q < best / 90; q++) rotatePage(p, 1); turned++; }
+  }
+  if (turned) { commit(); buildPages(true); }
+  return turned;
+}
+
+/* ---------- overzicht van alles wat je op de pagina's hebt gezet ---------- */
+async function textUnder(p, a) {
+  try {
+    const ix = await textIndex(p), pg = await getPg(S.sources[p.src], p.idx), vp = pg.getViewport({ scale: 1, rotation: (pg.rotate + p.rot) % 360 });
+    const x0 = a.cx - a.w / 2 - 1, x1 = a.cx + a.w / 2 + 1, y0 = a.cy - a.h / 2 - 1, y1 = a.cy + a.h / 2 + 1;
+    let out = '';
+    for (const m of ix.map) {
+      const n = m.it.str.length;
+      for (let i = 0; i < n; i++) {
+        const q = itemPoly(vp, m.it, i, 1), cx2 = (q[0][0] + q[2][0]) / 2, cy2 = (q[0][1] + q[2][1]) / 2;
+        if (cx2 >= x0 && cx2 <= x1 && cy2 >= y0 && cy2 <= y1) out += m.it.str[i];
+      }
+      if (out && !/\s$/.test(out)) out += ' ';
+    }
+    return out.replace(/\s+/g, ' ').trim();
+  } catch (e) { return ''; }
+}
+async function openMarks() {
+  endTextEdit();
+  const rows = [], cut = t => (t.length > 90 ? t.slice(0, 88) + '…' : t);
+  busy('Verzamelen');
+  try {
+    for (let i = 0; i < S.pages.length; i++) for (const a of S.pages[i].annots) {
+      let label = null;
+      switch (a.t) {
+        case 'text': label = 'Tekst: ' + cut((a.text || '').replace(/\s+/g, ' ')); break;
+        case 'note': label = 'Notitie: ' + cut((a.text || '').replace(/\s+/g, ' ')); break;
+        case 'hl': { const t = await textUnder(S.pages[i], a); label = (a.mode === 'under' ? 'Onderstreept' : a.mode === 'strike' ? 'Doorgehaald' : 'Gemarkeerd') + (t ? ': ' + cut(t) : ''); break; }
+        case 'ink': label = 'Tekening'; break;
+        case 'line': case 'arrow': case 'rect': case 'ellipse': label = a.t === 'arrow' ? 'Pijl' : a.t === 'line' ? 'Lijn' : 'Vorm'; break;
+        case 'stamp': label = 'Stempel: ' + a.label; break;
+        case 'sym': label = 'Vinkje of kruisje'; break;
+        case 'img': label = a.url ? 'Betaalcode' : 'Afbeelding of handtekening'; break;
+        case 'field': label = 'Invulveld: ' + a.name; break;
+        case 'link': label = 'Link: ' + (a.url || 'naar pagina ' + (S.pages.findIndex(q => q.id === a.page) + 1)); break;
+        case 'redact': label = 'Zwartgelakt'; break;
+        case 'cover': label = 'Afgedekt'; break;
+      }
+      if (label) rows.push({ i, a, label });
+    }
+  } finally { busyOff(); }
+  const list = h('div', { class: 'cmp-list' });
+  if (!rows.length) list.append(h('p', { text: 'Je hebt nog niets op de pagina\'s gezet.' }));
+  for (const r of rows) list.append(h('button', { class: 'cmp-row', onclick: () => {
+    sh.close();
+    const bx = annotBox(r.a);
+    goToPage(r.i, bx.cy / viewH(S.pages[r.i]));
+    setTool('select', true); setSel(r.a.id);
+  } }, h('small', { text: 'p. ' + (r.i + 1) }), h('span', { text: r.label })));
+  const sh = sheet('Alles wat je hebt toegevoegd', [h('p', { text: rows.length ? rows.length + (rows.length === 1 ? ' onderdeel' : ' onderdelen') + '. Tik op een regel om ernaartoe te gaan.' : '' }), list],
+    rows.length ? [h('button', { class: 'btn', html: ico('copy') + '<span>Kopieer als lijst</span>', onclick: () => copyText(rows.map(r => 'p. ' + (r.i + 1) + '  ' + r.label).join('\n')) })] : null, { wide: true });
+}
+
+/* ---------- zoeken in alle open documenten ---------- */
+function openSearchAll() {
+  const inp = h('input', { class: 'input', id: 'allQ', type: 'search', placeholder: 'Zoek in alle open documenten', autocomplete: 'off' }), out = h('div', { class: 'cmp-list' });
+  let tok = 0;
+  const run = async () => {
+    const q = inp.value.trim().toLowerCase(), my = ++tok;
+    out.textContent = '';
+    if (q.length < 2) return;
+    let total = 0;
+    for (let di = 0; di < DOCS.list.length; di++) {
+      const d = DOCS.list[di], cur = di === DOCS.cur, pages = cur ? S.pages : d.pages, sources = cur ? S.sources : d.sources, name = (cur ? S.name : d.name).replace(/\.pdf$/i, '');
+      let n = 0, firstPage = -1, snip = '';
+      for (let i = 0; i < pages.length; i++) {
+        const tc = await getText(sources[pages[i].src], pages[i].idx);
+        if (my !== tok) return;
+        let s = '';
+        for (const it of tc.items) { s += it.str; if (it.hasEOL) s += ' '; }
+        const low = s.toLowerCase();
+        let at = low.indexOf(q);
+        if (at >= 0 && firstPage < 0) { firstPage = i; snip = (at > 30 ? '…' : '') + s.slice(Math.max(0, at - 30), at + q.length + 40).replace(/\s+/g, ' ') + '…'; }
+        while (at >= 0) { n++; at = low.indexOf(q, at + q.length); }
+      }
+      total += n;
+      if (n) out.append(h('button', { class: 'cmp-row', onclick: () => {
+        sh.close();
+        if (!cur) switchTab(DOCS.list.indexOf(d));
+        openSearch(); $('#searchInput').value = inp.value.trim(); runSearch(inp.value.trim());
+      } }, h('small', { text: n + '×' }), h('span', null, h('b', { text: name }), h('br'), h('i', { text: snip }))));
+    }
+    if (my === tok && !total) out.append(h('p', { text: 'Niet gevonden in ' + (DOCS.list.length === 1 ? 'dit document.' : 'de ' + DOCS.list.length + ' open documenten.') }));
+  };
+  let timer = 0;
+  inp.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 250); });
+  const sh = sheet('Zoek in alle open documenten', [inp, out, h('p', { class: 'hint', text: 'Tik op een document om daar verder te zoeken. Gescande pagina\'s zonder tekst tellen niet mee.' })], null, { wide: true });
+  setTimeout(() => inp.focus(), 60);
+}
+
+/* ---------- een tweede document ernaast leggen om te kunnen vergelijken ---------- */
+const BESIDE = { doc: null, el: null, io: null };
+document.head.append(h('style', { text: `
+#beside { position: fixed; top: 0; right: 0; bottom: 0; width: 46vw; z-index: 20; display: flex; flex-direction: column; background: var(--desk); border-left: 2px solid var(--line); }
+#beside header { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 14px; min-height: 52px; background: var(--panel); border-bottom: 1px solid var(--line); }
+#beside header b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+#beside header small { color: var(--muted); white-space: nowrap; }
+#beside .bs-scroll { flex: 1; overflow: auto; padding: 14px; display: grid; gap: 14px; align-content: start; }
+#beside .bs-page { background: #fff; box-shadow: 0 1px 6px rgba(10,20,40,.22); width: 100%; }
+#beside canvas { display: block; width: 100%; height: 100%; }
+body.night #beside .bs-page { filter: invert(.92) hue-rotate(180deg); }
+` }));
+function closeBeside() {
+  if (!BESIDE.el) return;
+  if (BESIDE.io) BESIDE.io.disconnect();
+  BESIDE.el.remove(); BESIDE.el = null; BESIDE.doc = null; BESIDE.io = null;
+  $('#app').style.width = '';
+  fitWidth();
+}
+function showBeside(d) {
+  closeBeside();
+  const scroll = h('div', { class: 'bs-scroll' });
+  BESIDE.doc = d;
+  BESIDE.el = h('div', { id: 'beside', role: 'complementary', 'aria-label': 'Document ernaast' },
+    h('header', null, h('b', { text: d.name.replace(/\.pdf$/i, '') }), h('small', { text: 'alleen kijken' }), h('button', { class: 'icon-btn', 'aria-label': 'Sluit het document ernaast', html: ico('close'), onclick: closeBeside })), scroll);
+  document.body.append(BESIDE.el);
+  $('#app').style.width = '54vw';
+  BESIDE.io = new IntersectionObserver(async ents => {
+    for (const en of ents) {
+      const el = en.target;
+      if (!en.isIntersecting || el.dataset.done) continue;
+      el.dataset.done = '1';
+      try {
+        const p = d.pages[+el.dataset.i], pg = await getPg(d.sources[p.src], p.idx), rot = (pg.rotate + p.rot) % 360, v1 = pg.getViewport({ scale: 1, rotation: rot });
+        const vp = pg.getViewport({ scale: Math.min(3, el.clientWidth * (window.devicePixelRatio || 1) / v1.width), rotation: rot }), c = document.createElement('canvas');
+        c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+        el.append(c);
+        await pg.render({ canvasContext: c.getContext('2d', { alpha: false }), viewport: vp }).promise;
+      } catch (e) { delete el.dataset.done; }
+    }
+  }, { root: scroll, rootMargin: '600px 0px' });
+  d.pages.forEach((p, i) => {
+    const el = h('div', { class: 'bs-page', 'data-i': i, style: { aspectRatio: viewW(p) + ' / ' + viewH(p) } });
+    scroll.append(el); BESIDE.io.observe(el);
+  });
+  fitWidth();
+}
+function openBeside() {
+  if (BESIDE.el) { closeBeside(); return; }
+  if (window.innerWidth < 820) { toast('Naast elkaar kijken vraagt een breder scherm. Draai je telefoon of gebruik je laptop.', true); return; }
+  const others = DOCS.list.map((d, i) => ({ d, i })).filter(o => o.d);
+  if (!others.length) { toast('Open eerst een tweede document. Dat komt in een eigen tabblad, daarna kun je het ernaast leggen.', true); return; }
+  if (others.length === 1) { showBeside(others[0].d); return; }
+  const sh = sheet('Welk document ernaast?', [h('div', { class: 'cmp-list' }, others.map(o => h('button', { class: 'cmp-row', onclick: () => { sh.close(); showBeside(o.d); } }, h('small', { text: o.d.pages.length + ' p.' }), h('span', { text: o.d.name.replace(/\.pdf$/i, '') }))))]);
+}

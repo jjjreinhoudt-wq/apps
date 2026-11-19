@@ -1,5 +1,5 @@
 /* Papierwerk PDF — offline en "Delen naar deze app". Verhoog VERSION bij elke nieuwe uitgave. */
-const VERSION = "v10";
+const VERSION = "v11";
 const PREFIX = "papierwerk-";
 const CACHE = PREFIX + VERSION;
 const SHARED = PREFIX + "gedeeld";

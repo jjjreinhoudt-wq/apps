@@ -123,7 +123,7 @@ async function drawItem(ctx, page, it, T) {
     const b = it.box, im = await ctx.image(it.asset);
     if (!im) return;
     const [x, y] = U(...L2V(b, -b.w / 2, b.h / 2));
-    page.drawImage(im, { x, y, width: b.w, height: b.h, rotate: L.degrees(ang(b.rot || 0)), opacity: b.o == null ? 1 : b.o });
+    page.drawImage(im, Object.assign({ x, y, width: b.w, height: b.h, rotate: L.degrees(ang(b.rot || 0)), opacity: b.o == null ? 1 : b.o }, it.blend ? { blendMode: L.BlendMode.Multiply } : null));
   }
 }
 function addNoteAnnot(ctx, page, a, T) {
@@ -953,6 +953,7 @@ async function saveSession() {
     for (const s of srcs) if (!sessSaved.has(s.id)) { await IDB.set('src:' + s.id, s.bytes); sessSaved.add(s.id); }
     const used = new Set();
     for (const p of S.pages) for (const a of p.annots) if (a.asset) used.add(a.asset);
+    if (S.fx && S.fx.bg) used.add(S.fx.bg.asset);
     const assets = {};
     for (const id of used) if (S.assets[id]) assets[id] = S.assets[id];
     await IDB.set('session', { v: 1, name: S.name, dirty: S.dirty, pages: S.pages, fx: S.fx, meta: S.meta, assets, sources: srcs.map(s => ({ id: s.id, name: s.name, form: s.form, rasterOnly: s.rasterOnly })) });
@@ -994,6 +995,7 @@ function openMenu() {
       item('addfile', "Voeg PDF's of foto's toe", 'Achteraan dit document', () => { addAt = null; $('#fileAdd').click(); }),
       item('camera', 'Foto rechttrekken tot pagina', 'Bon of brief: recht, wit en scherp', openStraighten),
       item('blank', 'Begin met een leeg vel', 'Nieuw document op A4', () => inNewTab(async () => { const src = await blankSource(); replaceDoc([{ src, pages: await pagesOf(src) }], 'Nieuw document.pdf'); scheduleSessionSave(); })),
+      item('open', 'Recent geopend', 'Snel terug naar een eerder document', openRecent),
       item('info', 'Open het voorbeeld', 'Om alles uit te proberen', () => inNewTab(async () => { await loadExample(); scheduleSessionSave(); })),
     ]),
     group('Document', [
@@ -1010,6 +1012,11 @@ function openMenu() {
       item('shield', 'Persoonsgegevens zwartlakken', 'IBAN, e-mail, telefoon, postcode, BSN', openPrivacy),
       item('info', 'Eigenschappen', 'Naam, titel, auteur, leestijd', openProps),
     ]),
+    group('Bekijken', [
+      item('note', 'Alles wat je hebt toegevoegd', 'Overzicht van notities, markeringen en meer', openMarks),
+      item('search', 'Zoek in alle open documenten', '', openSearchAll),
+      IS_TOUCH && isNarrow() ? null : item('compare', BESIDE.el ? 'Sluit het document ernaast' : 'Leg een document ernaast', 'Twee documenten tegelijk in beeld', openBeside),
+    ]),
     group('Opslaan en exporteren', [
       item('save', 'Opslaan of opslaan als', 'Kies zelf de map en de naam', openSave),
       inClaude() ? null : item('print', 'Afdrukken', '', openPrint),
@@ -1018,6 +1025,12 @@ function openMenu() {
       item('split', 'Splitsen', 'In losse PDF\'s', openSplit),
       item('image', "Pagina's als afbeelding", 'JPG of PNG', openExportImages),
       item('textfile', 'Tekst uit het document', 'Kopiëren of opslaan', openExportText),
+    ]),
+    group('Van mij', [
+      item('stamp', 'Mijn stempels en logo', 'Eigen bedrijfsstempel of logo met één tik', openMyStamps),
+      item('blank', 'Briefpapier', 'Je eigen briefpapier achter het document', openLetterhead),
+      item('edit', 'Mijn gegevens', 'Naam, adres en meer in een formulier zetten', openMine),
+      item('swap', 'Instellingen meenemen', 'Naar je andere apparaat', openTransfer),
     ]),
     group('Hulp', [
       inClaude() ? item('spark', 'Assistent', 'Samenvatten, vragen, kern markeren, scan lezen', openAssistant) : null,

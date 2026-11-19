@@ -121,6 +121,11 @@ function annotItems(a) {
 /* Watermerk, paginanummers en koptekst: gelden voor het hele document. */
 function fxItems(p, i, total) {
   const out = [], W = viewW(p), H = viewH(p), fx = S.fx;
+  if (fx.bg && S.assets[fx.bg.asset] && !(fx.bg.first && i > 0)) {
+    // briefpapier: op paginabreedte, bovenaan uitgelijnd, vermenigvuldigd zodat het achter de tekst lijkt te liggen
+    const as = S.assets[fx.bg.asset], hh = W * as.h / as.w;
+    out.push({ k: 'img', asset: fx.bg.asset, box: { cx: W / 2, cy: hh / 2, w: W, h: hh, rot: 0 }, blend: true });
+  }
   if (fx.wm && fx.wm.text) {
     const str = safeText(fx.wm.text), r = fx.wm.ang;
     const unit = widthOf(str, 'helvB', 1) || 1;
@@ -162,8 +167,10 @@ function itemNode(it) {
   }
   if (it.k === 'img') {
     const b = it.box, as = S.assets[it.asset];
-    return sv('image', { href: as ? as.url : '', width: b.w, height: b.h, preserveAspectRatio: 'none', 'pointer-events': 'all',
+    const e = sv('image', { href: as ? as.url : '', width: b.w, height: b.h, preserveAspectRatio: 'none', 'pointer-events': it.blend ? 'none' : 'all',
       transform: 'translate(' + r2(b.cx) + ' ' + r2(b.cy) + ') rotate(' + (b.rot || 0) + ') translate(' + r2(-b.w / 2) + ' ' + r2(-b.h / 2) + ')' });
+    if (it.blend) e.style.mixBlendMode = 'multiply';
+    return e;
   }
   return sv('g');
 }
@@ -224,7 +231,7 @@ function drawAnnots(p, keep) {
     }
     add(g);
   }
-  if (S.fx.wm || S.fx.num || S.fx.head) {
+  if (S.fx.wm || S.fx.num || S.fx.head || S.fx.bg) {
     const g = sv('g', { class: 'fx' });
     for (const it of fxItems(p, S.pages.indexOf(p), S.pages.length)) g.append(itemNode(it));
     add(g);
@@ -520,6 +527,7 @@ function updateStrip() {
     const ch = fn => { fn(); if (a.t === 'text') layoutText(a, p); if (editor && editor.a === a) positionEditor(); drawAnnots(p); commit(); updateStrip(); };
     const kind = { text: 'text', hl: 'hl', ink: 'ink', line: 'shape', arrow: 'shape', rect: 'shape', ellipse: 'shape', note: 'note', sym: 'sym', stamp: 'stampc', cover: 'cover' }[a.t];
     if (a.t === 'text' || a.t === 'note') parts.push(h('button', { class: 'btn', html: ico('edit') + '<span>Bewerk</span>', onpointerdown: e => e.preventDefault(), onclick: () => (a.t === 'text' ? startTextEdit(a, p, false) : openNote(a, p)) }));
+    if (a.t === 'field' || a.t === 'link') parts.push(h('button', { class: 'btn', html: ico('edit') + '<span>Bewerk</span>', onclick: () => (a.t === 'field' ? openFieldAdd(a) : openLinkAdd(a)) }), h('span', { class: 'hint', text: a.t === 'field' ? a.name : (a.url || 'naar een pagina') }));
     if (kind) parts.push(...styleControls(kind, a, ch));
     if (a.t === 'redact') parts.push(h('span', { class: 'hint', text: 'Zwartlakken haalt de inhoud echt weg; deze pagina wordt bij opslaan een afbeelding.' }));
     if (a.t === 'img') parts.push(rangeCtl('Dekking', 0.1, 1, 0.05, a.o == null ? 1 : a.o, v => ch(() => { a.o = v; })));
