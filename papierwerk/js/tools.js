@@ -877,6 +877,15 @@ function trimCanvas(c) {
   o.getContext('2d').drawImage(c, x0, y0, o.width, o.height, 0, 0, o.width, o.height);
   return o;
 }
+/* Een bewaarde handtekening als afbeelding meegeven, zodat hij op een ander apparaat bij Foto kan worden gekozen. */
+async function exportSig(s) {
+  const bytes = dataUrlBytes(s.url), name = 'handtekening.png';
+  try {
+    const f = new File([bytes], name, { type: 'image/png' });
+    if (IS_TOUCH && !inClaude() && navigator.canShare && navigator.canShare({ files: [f] })) { await navigator.share({ files: [f], title: 'Handtekening' }); return; }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  if (await saveFile(name, bytes)) toast('Opgeslagen als handtekening.png. Zet dat bestand op je andere apparaat en kies het daar bij Onderteken, Foto.');
+}
 function openSign() {
   let mode = 'draw', ink = '#14213D', strokes = [], cur = null, typedFont = 'Caveat', upload = null;
   const saved = loadSigs();
@@ -966,10 +975,12 @@ function openSign() {
     savedBox.textContent = '';
     saved.forEach((s, i) => savedBox.append(h('div', { class: 'saved-sig', role: 'button', tabindex: 0, title: 'Plaats deze handtekening', onclick: () => { sh.close(); placeAsset(s.url, s.w, s.h, 150); toast('Handtekening geplaatst. Sleep hem op zijn plek.'); } },
       h('img', { src: s.url, alt: 'Bewaarde handtekening ' + (i + 1) }),
+      h('button', { class: 'x take', 'aria-label': 'Neem deze handtekening mee naar een ander apparaat', title: 'Meenemen naar een ander apparaat', html: ico('save'), onclick: ev => { ev.stopPropagation(); exportSig(s); } }),
       h('button', { class: 'x', 'aria-label': 'Verwijder bewaarde handtekening', html: ico('close'), onclick: ev => { ev.stopPropagation(); saved.splice(i, 1); storeSigs(saved); drawSaved(); } }))));
     savedWrap.hidden = !saved.length;
   };
-  const savedWrap = h('div', { class: 'field' }, h('span', { text: 'Bewaard op dit apparaat' }), savedBox);
+  const savedWrap = h('div', { class: 'field' }, h('span', { text: 'Bewaard op dit apparaat' }), savedBox,
+    h('span', { class: 'hint', text: 'Met het pijltje neem je een handtekening mee naar een ander apparaat. Kies hem daar bij Foto.' }));
   const keep = h('input', { type: 'checkbox', id: 'sigKeep' });
 
   const finish = async () => {
