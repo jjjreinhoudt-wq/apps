@@ -879,7 +879,19 @@ function trimCanvas(c) {
 }
 /* Een bewaarde handtekening als afbeelding meegeven, zodat hij op een ander apparaat bij Foto kan worden gekozen. */
 async function exportSig(s) {
-  const bytes = dataUrlBytes(s.url), name = 'handtekening.png';
+  // Op wit papier meegeven: veel apps maken van een doorzichtige afbeelding onderweg een zwart vlak.
+  const name = 'handtekening.png';
+  let bytes = dataUrlBytes(s.url);
+  try {
+    const im = new Image();
+    im.src = s.url;
+    await im.decode();
+    const pad = Math.round(Math.max(im.width, im.height) * 0.08), c = document.createElement('canvas');
+    c.width = im.width + pad * 2; c.height = im.height + pad * 2;
+    const x = c.getContext('2d');
+    x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, pad, pad);
+    bytes = dataUrlBytes(c.toDataURL('image/png'));
+  } catch (e) {}
   try {
     const f = new File([bytes], name, { type: 'image/png' });
     if (IS_TOUCH && !inClaude() && navigator.canShare && navigator.canShare({ files: [f] })) { await navigator.share({ files: [f], title: 'Handtekening' }); return; }
@@ -925,10 +937,28 @@ function openSign() {
     x.drawImage(upload.canvas, 0, 0);
     if (upClean.checked) {
       // papier wegpoetsen: licht wordt doorzichtig, inkt blijft
-      const im = x.getImageData(0, 0, c.width, c.height), d = im.data;
-      for (let i = 0; i < d.length; i += 4) {
-        const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-        d[i + 3] = Math.min(d[i + 3], clamp((205 - lum) * 3.2, 0, 255));
+      const im = x.getImageData(0, 0, c.width, c.height), d = im.data, W = c.width, H = c.height;
+      // achtergrondkleur schatten uit de dekkende pixels langs de rand
+      const rs = [], gs = [], bs = [];
+      const probe = (px, py) => { const i = (py * W + px) * 4; if (d[i + 3] > 200) { rs.push(d[i]); gs.push(d[i + 1]); bs.push(d[i + 2]); } };
+      const inset = Math.max(2, Math.round(Math.min(W, H) * 0.04));
+      for (let px = 0; px < W; px += 3) { probe(px, inset); probe(px, H - 1 - inset); }
+      for (let py = 0; py < H; py += 3) { probe(inset, py); probe(W - 1 - inset, py); }
+      const med = a => { a.sort((p, q) => p - q); return a.length ? a[a.length >> 1] : 255; };
+      const br = med(rs), bg = med(gs), bb = med(bs), dark = rs.length > 20 && 0.299 * br + 0.587 * bg + 0.114 * bb < 70;
+      if (dark) {
+        // een doorzichtige handtekening die onderweg een zwart vlak heeft gekregen: het donkere vlak weghalen, de inkt houden
+        for (let i = 0; i < d.length; i += 4) {
+          const dr = d[i] - br, dg = d[i + 1] - bg, db = d[i + 2] - bb, dist = Math.sqrt(dr * dr + dg * dg + db * db);
+          const a = clamp((dist - 16) * 5, 0, 255);
+          if (a > 0 && a < 255) { const k = 255 / Math.max(a, 60); d[i] = clamp(br + dr * k, 0, 255); d[i + 1] = clamp(bg + dg * k, 0, 255); d[i + 2] = clamp(bb + db * k, 0, 255); }
+          d[i + 3] = Math.min(d[i + 3], a);
+        }
+      } else {
+        for (let i = 0; i < d.length; i += 4) {
+          const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          d[i + 3] = Math.min(d[i + 3], clamp((205 - lum) * 3.2, 0, 255));
+        }
       }
       x.putImageData(im, 0, 0);
     }
