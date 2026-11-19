@@ -1,9 +1,10 @@
 /* Papierwerk PDF — offline en "Delen naar deze app". Verhoog VERSION bij elke nieuwe uitgave. */
-const VERSION = "v4";
+const VERSION = "v5";
 const PREFIX = "papierwerk-";
 const CACHE = PREFIX + VERSION;
 const SHARED = PREFIX + "gedeeld";
-const SHELL = ["./", "base.css", "index.html", "manifest.webmanifest", "icons/icon-180.png", "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png", "lib/pdf-lib.min.js", "lib/pdf.min.js", "lib/pdf.worker.min.js", "lib/qrcode.js", "js/core.js", "js/docops.js", "js/extra.js", "js/plus.js", "js/rechtzetter.js", "js/tools.js", "pwa.js"];
+const GROOT = PREFIX + "groot";   // grote, vaste bestanden (tekstherkenning): pas ophalen bij gebruik, bewaren over versies heen
+const SHELL = ["./", "base.css", "index.html", "manifest.webmanifest", "icons/icon-180.png", "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png", "lib/pdf-lib.min.js", "lib/pdf.min.js", "lib/pdf.worker.min.js", "lib/qrcode.js", "js/core.js", "js/docops.js", "js/extra.js", "js/ocr.js", "js/plus.js", "js/rechtzetter.js", "js/tools.js", "pwa.js"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE)
@@ -12,7 +13,7 @@ self.addEventListener("install", e => {
 });
 self.addEventListener("activate", e => {
   e.waitUntil(caches.keys()
-    .then(keys => Promise.all(keys.filter(k => k.startsWith(PREFIX) && k !== CACHE && k !== SHARED).map(k => caches.delete(k))))
+    .then(keys => Promise.all(keys.filter(k => k.startsWith(PREFIX) && k !== CACHE && k !== SHARED && k !== GROOT).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 /* Bestanden die vanuit een andere app worden gedeeld even bewaren en de app openen. */
@@ -33,6 +34,16 @@ self.addEventListener("fetch", e => {
   const req = e.request, url = new URL(req.url);
   if (req.method === "POST" && url.pathname.endsWith("/share-target")) { e.respondWith(takeShare(req)); return; }
   if (req.method !== "GET" || url.origin !== location.origin) return;
+  if (url.pathname.indexOf("/lib/ocr/") >= 0) {
+    e.respondWith((async () => {
+      const c = await caches.open(GROOT), hit = await c.match(req.url);
+      if (hit) return hit;
+      const res = await fetch(req);
+      if (res.ok) e.waitUntil(c.put(req.url, res.clone()));
+      return res;
+    })());
+    return;
+  }
   // eerst het netwerk (zo komen updates direct door), de bewaarde kopie alleen als er geen verbinding is
   e.respondWith((async () => {
     try {

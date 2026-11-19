@@ -899,3 +899,56 @@ async function openBookmarks() {
     h('p', { text: 'Bladwijzers staan in het zijpaneel van een pdf-lezer, zodat je snel naar een hoofdstuk springt.' }), list],
   [tocBtn, addBtn], { wide: true });
 }
+
+/* ---------- scans doorzoekbaar maken (tekstherkenning) ---------- */
+const canOcr = () => !!(window.Leesmachine && Leesmachine.available());
+async function openOcr() {
+  if (!canOcr()) { toast(inClaude() ? 'Tekstherkenning werkt in de geïnstalleerde app. Hier kan de Assistent een scan voor je lezen.' : 'Tekstherkenning werkt niet in deze browser.', true); return; }
+  endTextEdit();
+  const todo = [];
+  busy('Pagina\'s nakijken');
+  try { for (let i = 0; i < S.pages.length; i++) { const ix = await textIndex(S.pages[i]); if (ix.raw.replace(/\s/g, '').length < 12) todo.push(i); } }
+  finally { busyOff(); }
+  if (!todo.length) { toast("Alle pagina's hebben al echte tekst. Er valt niets te herkennen."); return; }
+  const n = todo.length, tot = S.pages.length;
+  const sh = sheet('Maak scan doorzoekbaar', [
+    h('p', { text: (n === tot ? (n === 1 ? 'Deze pagina is' : 'Alle ' + n + " pagina's zijn") : n + ' van de ' + tot + " pagina's " + (n === 1 ? 'is' : 'zijn')) + ' een scan zonder echte tekst. Ik lees de tekst en leg die onzichtbaar onder de pagina. Daarna kun je zoeken, selecteren, kopiëren, laten voorlezen en persoonsgegevens laten zwartlakken.' }),
+    h('p', { class: 'hint', text: 'Het lezen gebeurt op je eigen apparaat, er wordt niets verstuurd. Reken op een paar seconden tot een halve minuut per pagina. De eerste keer wordt de leesmachine opgehaald (ongeveer 9 MB); daarna werkt het ook zonder internet. Gedrukte tekst gaat goed, handschrift meestal niet. Staat een pagina op zijn kant, draai hem dan eerst rechtop.' + (hasMarks() ? ' Je aantekeningen worden hierbij vastgezet in de pagina.' : '') })],
+  [h('button', { class: 'btn btn-primary', html: ico('search') + '<span>Lees ' + (n === 1 ? 'de pagina' : n + " pagina's") + '</span>', onclick: async () => {
+    sh.close();
+    let words = 0, read = 0;
+    const first = todo[0];
+    const ok = await rebake('Tekst herkennen', async (bytes, prog) => {
+      const d = await PDFLib.PDFDocument.load(bytes, { updateMetadata: false }), js = await pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
+      const font = await d.embedFont(PDFLib.StandardFonts.Helvetica);
+      try {
+        for (let k = 0; k < todo.length; k++) {
+          const i = todo[k], pg = await js.getPage(i + 1), v1 = pg.getViewport({ scale: 1 });
+          const sc = Math.min(3.2, 2100 / Math.max(v1.width, v1.height)), vp = pg.getViewport({ scale: sc }), c = document.createElement('canvas');
+          c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+          const x = c.getContext('2d', { alpha: false });
+          x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+          await pg.render({ canvasContext: x, viewport: vp }).promise;
+          busy('Tekst herkennen: pagina ' + (k + 1) + ' van ' + todo.length, (k + 0.05) / todo.length);
+          const res = await Leesmachine.recognize(c, { progress: f => busy('Tekst herkennen: pagina ' + (k + 1) + ' van ' + todo.length, (k + clamp(f, 0, 1)) / todo.length) });
+          c.width = c.height = 0;
+          const page = d.getPage(i);
+          let here = 0;
+          for (const w of res.words || []) {
+            const str = safeText(w.text || '').trim();
+            if (!str) continue;
+            const hPx = w.y1 - w.y0, w1 = font.widthOfTextAtSize(str, 1);
+            if (!(w1 > 0) || hPx <= 0) continue;
+            const [px, py] = vp.convertToPdfPoint(w.x0, w.y1 - hPx * 0.18);
+            page.drawText(str, { x: px, y: py, size: clamp((w.x1 - w.x0) / sc / w1, 2, 72), font, opacity: 0, rotate: PDFLib.degrees(pg.rotate || 0) });
+            here++;
+          }
+          words += here; if (here) read++;
+        }
+      } finally { try { js.destroy(); } catch (e) {} try { Leesmachine.stop(); } catch (e) {} }
+      if (!words) throw new Error(n === 1 ? 'Op deze pagina vond ik geen leesbare tekst.' : "Op deze pagina's vond ik geen leesbare tekst.");
+      return await d.save();
+    }, () => goToPage(first));
+    if (ok) toast(read + (read === 1 ? ' pagina is' : " pagina's zijn") + ' nu doorzoekbaar (' + words + ' woorden herkend). Probeer het zoeken of Lees voor.');
+  } })]);
+}
