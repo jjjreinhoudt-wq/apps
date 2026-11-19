@@ -777,7 +777,7 @@ async function guardUnsaved() {
   if (c === 'save') openSave();
   return c === 'go';
 }
-async function openDoc(files) {
+async function openDocHere(files) {
   files = Array.from(files || []);
   if (!files.length || !(await guardUnsaved())) return;
   busy('Openen');
@@ -789,7 +789,7 @@ async function openDoc(files) {
     scheduleSessionSave();
     if (list.some(it => it.src.hasForm)) toast('Dit document heeft invulvelden. Tik erin om ze in te vullen.');
   } catch (e) {
-    if (e && e.message !== 'cancel') toast((e && e.message) || 'Het bestand kon niet worden geopend.', true);
+    if (e && e.message !== 'cancel') toast(/invalid pdf|missing pdf|unexpected/i.test(e.message || '') ? 'Dit bestand is geen geldige PDF of is beschadigd.' : (e && e.message) || 'Het bestand kon niet worden geopend.', true);
   } finally { busyOff(); }
 }
 async function addFiles(files, at) {
@@ -960,11 +960,11 @@ function openMenu() {
   const night = document.body.classList.contains('night');
   const sh = sheet('Menu', [
     group('Bestand', [
-      item('open', 'Open een PDF', 'Of een foto, die wordt een PDF', () => $('#fileOpen').click()),
+      item('open', 'Open een PDF', 'Komt in een eigen tabblad naast wat al open staat', () => $('#fileOpen').click()),
       item('addfile', "Voeg PDF's of foto's toe", 'Achteraan dit document', () => { addAt = null; $('#fileAdd').click(); }),
       item('camera', 'Foto rechttrekken tot pagina', 'Bon of brief: recht, wit en scherp', openStraighten),
-      item('blank', 'Begin met een leeg vel', 'Nieuw document op A4', async () => { if (!(await guardUnsaved())) return; const src = await blankSource(); replaceDoc([{ src, pages: await pagesOf(src) }], 'Nieuw document.pdf'); scheduleSessionSave(); }),
-      item('info', 'Open het voorbeeld', 'Om alles uit te proberen', async () => { if (await guardUnsaved()) { await loadExample(); scheduleSessionSave(); } }),
+      item('blank', 'Begin met een leeg vel', 'Nieuw document op A4', () => inNewTab(async () => { const src = await blankSource(); replaceDoc([{ src, pages: await pagesOf(src) }], 'Nieuw document.pdf'); scheduleSessionSave(); })),
+      item('info', 'Open het voorbeeld', 'Om alles uit te proberen', () => inNewTab(async () => { await loadExample(); scheduleSessionSave(); })),
     ]),
     group('Document', [
       item('pages', "Pagina's ordenen", 'Herorden, draai, verwijder, voeg toe', openOrganizer),

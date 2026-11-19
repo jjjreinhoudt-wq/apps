@@ -296,6 +296,7 @@ async function guessInvoice() {
   if (!a) { let m, best = 0; const re = new RegExp('(?:€|EUR)\\s*' + AM, 'g'); while ((m = re.exec(text))) { const v = parseAmount(m[1]); if (v > best) { best = v; a = m[1]; } } }
   const amt = parseAmount(a);
   if (amt > 0) out.amount = amt;
+  out.invoice = /factuur\s*(?:nummer|nr|datum|bedrag)|invoice\s*(?:number|no\b|date)|te betalen|te voldoen|^\s*(?:factuur|invoice)\b/i.test(text);
   const f = /(?:factuur|invoice)\s*(?:nummer|nr\.?|no\.?|number)?\s*[:#]?\s*([A-Z]{0,5}[-\/]?\d[\w\-\/.]{1,18})/i.exec(text);
   if (f) out.ref = 'Factuur ' + f[1].replace(/[.,]$/, '');
   // staat er een rekeningnummer op de factuur, dan is dat bijna altijd dat van de afzender
@@ -414,7 +415,7 @@ function openQr() {
   guessInvoice().then(g => {
     if (!sh.el.isConnected || st.link || st.ssid) return;
     let hit = false;
-    if (g.amount > 0 && !st.amount) { st.amount = g.amount.toFixed(2).replace('.', ','); if (!st.ref) st.ref = g.ref || ''; st.guessed = true; hit = true; if (st.kind === 'link') st.kind = 'pay'; }
+    if (g.amount > 0 && !st.amount) { st.amount = g.amount.toFixed(2).replace('.', ','); if (!st.ref) st.ref = g.ref || ''; st.guessed = true; hit = true; if (st.kind === 'link' && g.invoice) st.kind = 'pay'; }
     if (g.iban && !st.iban.trim()) { st.iban = g.iban.replace(/(.{4})/g, '$1 ').trim(); st.fromDoc = true; hit = true; if (g.name && !st.name.trim()) st.name = g.name; }
     if (hit) draw();
   }).catch(() => {});
@@ -1054,3 +1055,104 @@ async function openOcr() {
     if (ok) toast(read + (read === 1 ? ' pagina is' : " pagina's zijn") + ' nu doorzoekbaar (' + words + ' woorden herkend). Probeer het zoeken of Lees voor.');
   } })]);
 }
+
+/* ================================================================
+   Meerdere documenten naast elkaar (tabbladen)
+   ================================================================ */
+const DOCS = { list: [null], cur: 0, max: 8 };   // null = het document dat nu in beeld staat
+document.head.append(h('style', { text: `
+#tabbar { display: flex; gap: 4px; padding: 0 8px; overflow-x: auto; scrollbar-width: none; border-top: 1px solid var(--line); background: var(--panel); }
+#tabbar::-webkit-scrollbar { display: none; }
+#tabbar[hidden] { display: none; }
+.doctab { flex: 0 1 220px; min-width: 120px; display: flex; align-items: center; gap: 2px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 14px; padding: 0 2px 0 10px; min-height: 40px; cursor: pointer; }
+.doctab span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.doctab[aria-selected="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--mark); }
+.doctab:hover { color: var(--ink); }
+.doctab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.doctab i { font-style: normal; color: var(--accent); margin-right: 4px; }
+.doctab b { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 400; }
+.doctab b:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); }
+.doctab b svg { width: 14px; height: 14px; }
+` }));
+function stashDoc() {
+  return { name: S.name, sources: S.sources, pages: S.pages, assets: S.assets, fx: S.fx, meta: S.meta, outline: S.outline, dirty: S.dirty, isExample: S.isExample,
+    hist: S.hist, fut: S.fut, lastSnap, scale: S.scale, top: viewer.scrollTop, left: viewer.scrollLeft };
+}
+function loadDoc(d) {
+  endTextEdit(true);
+  if (LEES.on) stopReading();
+  clearThumbs();
+  Object.assign(S, { name: d.name, sources: d.sources, pages: d.pages, assets: d.assets, fx: d.fx, meta: d.meta, outline: d.outline, isExample: d.isExample, hist: d.hist, fut: d.fut, sel: null, scale: d.scale });
+  lastSnap = d.lastSnap;
+  Q.q = ''; Q.hits = []; Q.cur = -1;
+  $('#docName').textContent = S.name;
+  $('#banner').hidden = !S.isExample;
+  if (ORG.open) closeOrganizer();
+  setTool('select');
+  buildPages(false);
+  if (typeof onScaleChanged === 'function') onScaleChanged();
+  viewer.scrollTop = d.top || 0; viewer.scrollLeft = d.left || 0;
+  setDirty(!!d.dirty);
+  updateUndoUI();
+  scheduleSessionSave();
+}
+/* Zet het huidige document opzij zodat er een nieuw tabblad bij kan. Geeft een functie om dat terug te draaien. */
+function parkCurrent() {
+  if (!S.pages.length || S.isExample) return null;      // een leeg scherm of het voorbeeld wordt gewoon vervangen
+  const d = stashDoc();
+  DOCS.list[DOCS.cur] = d;
+  S.sources = {}; S.pages = []; S.assets = {}; S.hist = []; S.fut = []; S.dirty = false; S.outline = undefined;
+  DOCS.cur = DOCS.list.length; DOCS.list.push(null);
+  return () => { DOCS.list.pop(); DOCS.cur = DOCS.list.indexOf(d); DOCS.list[DOCS.cur] = null; loadDoc(d); };
+}
+async function inNewTab(fn) {
+  if (S.pages.length && !S.isExample && DOCS.list.length >= DOCS.max) { toast('Er staan al ' + DOCS.max + ' documenten open. Sluit er eerst één.', true); return; }
+  const undo = parkCurrent();
+  try { await fn(); } catch (e) { console.error(e); }
+  if (!S.pages.length && undo) undo();                  // openen mislukt of afgebroken: terug naar waar je was
+  renderTabs();
+}
+async function openDoc(files) {
+  files = Array.from(files || []);
+  if (!files.length) return;
+  await inNewTab(() => openDocHere(files));
+}
+function switchTab(i) {
+  if (i === DOCS.cur || !DOCS.list[i]) return;
+  DOCS.list[DOCS.cur] = stashDoc();
+  const d = DOCS.list[i];
+  DOCS.list[i] = null; DOCS.cur = i;
+  loadDoc(d);
+  renderTabs();
+}
+async function closeTab(i) {
+  if (i !== DOCS.cur) switchTab(i);
+  if (!(await guardUnsaved())) return;
+  for (const s of Object.values(S.sources)) { try { s.pdf.destroy(); } catch (e) {} }
+  S.sources = {}; S.pages = []; S.dirty = false;
+  DOCS.list.splice(DOCS.cur, 1);
+  if (!DOCS.list.length) { DOCS.list = [null]; DOCS.cur = 0; await loadExample(); scheduleSessionSave(); }
+  else { const j = Math.min(DOCS.cur, DOCS.list.length - 1), d = DOCS.list[j]; DOCS.list[j] = null; DOCS.cur = j; loadDoc(d); }
+  renderTabs();
+}
+function renderTabs() {
+  let bar = $('#tabbar');
+  if (!bar) { bar = h('div', { id: 'tabbar', role: 'tablist', 'aria-label': 'Open documenten' }); $('#topbar').after(bar); }
+  bar.hidden = DOCS.list.length < 2;
+  bar.textContent = '';
+  if (bar.hidden) return;
+  DOCS.list.forEach((d, i) => {
+    const cur = i === DOCS.cur, name = (cur ? S.name : d.name).replace(/\.pdf$/i, ''), dirty = cur ? S.dirty : d.dirty;
+    const t = h('button', { class: 'doctab', role: 'tab', 'aria-selected': String(cur), title: name, onclick: () => switchTab(i) },
+      dirty ? h('i', { 'aria-label': 'niet opgeslagen', text: '•' }) : null, h('span', { text: name }),
+      h('b', { role: 'button', 'aria-label': 'Sluit ' + name, html: ico('close'), onclick: e => { e.stopPropagation(); closeTab(i); } }));
+    bar.append(t);
+    if (cur) setTimeout(() => t.scrollIntoView({ block: 'nearest', inline: 'nearest' }), 0);
+  });
+}
+{
+  const base = setDirty;
+  let last = null;
+  window.setDirty = function (v) { base(v); const now = S.dirty + '|' + S.name; if (now !== last && DOCS.list.length > 1) { last = now; renderTabs(); } };
+}
+window.addEventListener('beforeunload', e => { if ((S.dirty && !S.isExample && DOCS.list.length > 1) || DOCS.list.some(d => d && d.dirty)) { e.preventDefault(); e.returnValue = ''; } });
