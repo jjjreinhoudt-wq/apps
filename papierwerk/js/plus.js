@@ -496,3 +496,406 @@ async function openStraighten() {
   } catch (e) { toast((e && e.message) || 'De scan kon niet worden toegevoegd.', true); }
   finally { busyOff(); }
 }
+
+/* ================================================================
+   Afdrukken, bijsnijden, invulvelden, links, bladwijzers
+   ================================================================ */
+Object.assign(ICONS, {
+  print: 'M7 8V4h10v4M7 17H4v-7h16v7h-3M7 14h10v6H7z',
+  crop: 'M7 3v14h14M3 7h14v14',
+  field: 'M3 7h18v10H3zM7 10v4',
+  link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
+  bookmark: 'M7 4h10v16l-5-4-5 4z',
+});
+document.head.append(h('style', { text: `
+#printHost { display: none; }
+@media print {
+  html, body { background: #fff !important; margin: 0 !important; height: auto !important; overflow: visible !important; }
+  body > *:not(#printHost) { display: none !important; }
+  #printHost { display: block !important; }
+  #printHost img { display: block; width: 100%; height: 100vh; object-fit: contain; break-after: page; page-break-after: always; }
+  #printHost img:last-child { break-after: auto; page-break-after: auto; }
+  #printHost img.liggend { page: liggend; }
+  @page { margin: 0; }
+  @page liggend { size: landscape; margin: 0; }
+}
+.crop-stage { position: relative; justify-self: center; max-width: 100%; touch-action: none; user-select: none; background: #fff; box-shadow: 0 1px 6px rgba(10,20,40,.25); }
+.crop-stage img { display: block; max-width: 100%; max-height: min(52vh, 520px); }
+.crop-box { position: absolute; border: 2px solid var(--accent); box-shadow: 0 0 0 4000px rgba(15,20,27,.45); cursor: move; }
+.crop-clip { position: absolute; inset: 0; overflow: hidden; }
+.crop-h { position: absolute; width: 44px; height: 44px; margin: -22px; touch-action: none; display: grid; place-items: center; }
+.crop-h::after { content: ''; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid var(--accent); }
+.bm-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
+.bm-row small { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+` }));
+
+/* ---------- afdrukken ---------- */
+async function openPrint() {
+  if (inClaude()) { toast('Afdrukken kan in deze weergave niet. Sla de PDF op en druk hem daarna af, of gebruik de geïnstalleerde app.', true); return; }
+  endTextEdit();
+  const imgs = await run('Afdruk voorbereiden', async prog => {
+    const bytes = await buildPdf(S.pages, { progress: f => prog(f * 0.3) });
+    const doc = await pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }).promise, out = [];
+    try {
+      for (let i = 1; i <= doc.numPages; i++) {
+        const pg = await doc.getPage(i), v1 = pg.getViewport({ scale: 1 });
+        const vp = pg.getViewport({ scale: Math.min(3, 1750 / Math.max(v1.width, v1.height)) });
+        const c = document.createElement('canvas');
+        c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+        const x = c.getContext('2d', { alpha: false });
+        x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+        await pg.render({ canvasContext: x, viewport: vp }).promise;
+        const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
+        out.push({ url: URL.createObjectURL(blob), land: c.width > c.height });
+        c.width = c.height = 0;
+        prog(0.3 + 0.7 * i / doc.numPages);
+      }
+    } finally { try { doc.destroy(); } catch (e) {} }
+    return out;
+  });
+  if (!imgs) return;
+  const old = $('#printHost');
+  if (old) old.remove();
+  const host = h('div', { id: 'printHost' }, imgs.map(im => h('img', { src: im.url, alt: '', class: im.land ? 'liggend' : null })));
+  document.body.append(host);
+  await Promise.all(Array.from(host.children).map(im => im.decode().catch(() => {})));
+  const clean = () => { for (const im of imgs) URL.revokeObjectURL(im.url); host.remove(); };
+  window.addEventListener('afterprint', clean, { once: true });
+  try { window.print(); } catch (e) { clean(); toast('Afdrukken lukte niet in deze browser. Sla de PDF op en druk hem daarna af.', true); }
+}
+
+/* ---------- document opnieuw laden na een bewerking die in het bestand zelf gebeurt ---------- */
+async function rebake(label, edit, done) {
+  endTextEdit();
+  const keepOutline = S.outline, keepMeta = S.meta, name = S.name;
+  const src = await run(label, async prog => {
+    const bytes = await buildPdf(S.pages, { progress: f => prog(f * 0.3) });
+    const out = await edit(bytes, f => prog(0.3 + f * 0.65));
+    if (!out) return null;
+    return await makeSource(out, name);
+  });
+  if (!src) return false;
+  // bladwijzers verwijzen naar pagina's; die krijgen nieuwe nummers, in dezelfde volgorde
+  const oldIds = S.pages.map(p => p.id), pages = await pagesOf(src);
+  replaceDoc([{ src, pages }], name, { meta: keepMeta, assets: {} });
+  if (Array.isArray(keepOutline)) S.outline = keepOutline.map(o => ({ title: o.title, page: (pages[oldIds.indexOf(o.page)] || {}).id })).filter(o => o.page);
+  setDirty(true);
+  scheduleSessionSave();
+  if (done) done();
+  return true;
+}
+const hasMarks = () => S.pages.some(p => p.annots.length) || !!(S.fx && (S.fx.wm || S.fx.num || S.fx.head));
+
+/* ---------- bijsnijden ---------- */
+async function openCrop() {
+  endTextEdit();
+  const pi = curIndex(), p = S.pages[pi];
+  if (!p) return;
+  busy('Pagina laden');
+  let url, cw, ch2;
+  try {
+    const pg = await getPg(S.sources[p.src], p.idx), rot = (pg.rotate + p.rot) % 360, v1 = pg.getViewport({ scale: 1, rotation: rot });
+    const vp = pg.getViewport({ scale: Math.min(2, 900 / Math.max(v1.width, v1.height)), rotation: rot }), c = document.createElement('canvas');
+    c.width = cw = Math.round(vp.width); c.height = ch2 = Math.round(vp.height);
+    const x = c.getContext('2d', { alpha: false });
+    x.fillStyle = '#fff'; x.fillRect(0, 0, cw, ch2);
+    await pg.render({ canvasContext: x, viewport: vp }).promise;
+    var pix = x.getImageData(0, 0, cw, ch2).data;
+    url = c.toDataURL('image/jpeg', 0.85);
+  } catch (e) { busyOff(); toast('Deze pagina kon niet worden geladen.', true); return; }
+  busyOff();
+  const R = { l: 0.06, t: 0.06, r: 0.94, b: 0.94 };
+  let all = false;
+  const box = h('div', { class: 'crop-box' }), img = h('img', { src: url, alt: 'Pagina ' + (pi + 1), draggable: 'false' });
+  const hs = ['lt', 'rt', 'lb', 'rb'].map(k => h('div', { class: 'crop-h', 'data-k': k, role: 'slider', 'aria-label': 'Hoek van de uitsnede' }));
+  const stage = h('div', { class: 'crop-stage' }, img, h('div', { class: 'crop-clip' }, box), hs);
+  const place = () => {
+    Object.assign(box.style, { left: R.l * 100 + '%', top: R.t * 100 + '%', width: (R.r - R.l) * 100 + '%', height: (R.b - R.t) * 100 + '%' });
+    for (const e of hs) { const k = e.dataset.k; e.style.left = (k[0] === 'l' ? R.l : R.r) * 100 + '%'; e.style.top = (k[1] === 't' ? R.t : R.b) * 100 + '%'; }
+  };
+  let drag = null;
+  const pos = e => { const b = stage.getBoundingClientRect(); return [(e.clientX - b.left) / b.width, (e.clientY - b.top) / b.height]; };
+  const down = (e, k) => { e.preventDefault(); e.stopPropagation(); drag = { k, p0: pos(e), R0: Object.assign({}, R) }; e.currentTarget.setPointerCapture(e.pointerId); };
+  const move = e => {
+    if (!drag) return;
+    const [x, y] = pos(e), MIN = 0.06;
+    if (drag.k === 'box') {
+      const w = drag.R0.r - drag.R0.l, hh = drag.R0.b - drag.R0.t;
+      R.l = clamp(drag.R0.l + x - drag.p0[0], 0, 1 - w); R.t = clamp(drag.R0.t + y - drag.p0[1], 0, 1 - hh); R.r = R.l + w; R.b = R.t + hh;
+    } else {
+      if (drag.k[0] === 'l') R.l = clamp(x, 0, R.r - MIN); else R.r = clamp(x, R.l + MIN, 1);
+      if (drag.k[1] === 't') R.t = clamp(y, 0, R.b - MIN); else R.b = clamp(y, R.t + MIN, 1);
+    }
+    place();
+  };
+  const up = () => { drag = null; };
+  for (const e of hs) { e.addEventListener('pointerdown', ev => down(ev, e.dataset.k)); e.addEventListener('pointermove', move); e.addEventListener('pointerup', up); e.addEventListener('pointercancel', up); }
+  box.addEventListener('pointerdown', ev => down(ev, 'box')); box.addEventListener('pointermove', move); box.addEventListener('pointerup', up); box.addEventListener('pointercancel', up);
+  const autoFit = () => {
+    let x0 = cw, y0 = ch2, x1 = -1, y1 = -1;
+    for (let y = 0; y < ch2; y += 2) for (let x = 0; x < cw; x += 2) {
+      const i = (y * cw + x) * 4;
+      if (pix[i] * 0.299 + pix[i + 1] * 0.587 + pix[i + 2] * 0.114 < 238) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    // wat je zelf op de pagina hebt gezet telt ook mee
+    for (const a of p.annots) { const bx = annotBox(a), hw = bx.w / 2 + 2, hh2 = bx.h / 2 + 2, k = cw / viewW(p);
+      x0 = Math.min(x0, (bx.cx - hw) * k); x1 = Math.max(x1, (bx.cx + hw) * k); y0 = Math.min(y0, (bx.cy - hh2) * k); y1 = Math.max(y1, (bx.cy + hh2) * k); }
+    if (x1 < 0) { toast('Deze pagina is leeg.'); return; }
+    const m = 0.02;
+    R.l = clamp(x0 / cw - m, 0, 1); R.t = clamp(y0 / ch2 - m, 0, 1); R.r = clamp(x1 / cw + m, 0, 1); R.b = clamp(y1 / ch2 + m, 0, 1);
+    place();
+  };
+  const scope = h('div');
+  const drawScope = () => { scope.textContent = ''; scope.append(chips([[false, 'Alleen pagina ' + (pi + 1)], [true, "Alle pagina's"]], all, v => { all = v; drawScope(); })); };
+  drawScope(); place();
+  const sh = sheet('Pagina bijsnijden', [stage,
+    h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap' } }, h('button', { class: 'btn', text: 'Witte randen eraf', onclick: autoFit }), h('button', { class: 'btn', text: 'Hele pagina', onclick: () => { R.l = R.t = 0; R.r = R.b = 1; place(); } })),
+    S.pages.length > 1 ? h('div', { class: 'field' }, h('span', { text: 'Toepassen op' }), scope) : null,
+    h('p', { class: 'hint', text: (hasMarks() ? 'Je aantekeningen worden hierbij vastgezet in de pagina en zijn daarna niet meer los te verplaatsen. ' : '') + 'Wat je wegsnijdt is niet meer te zien, maar zit nog wel in het bestand. Gebruik voor gevoelige gegevens het zwartlakken.' })],
+  [h('button', { class: 'btn btn-primary', html: ico('crop') + '<span>Snijd bij</span>', onclick: async () => {
+    sh.close();
+    const ok = await rebake('Bijsnijden', async bytes => {
+      const d = await PDFLib.PDFDocument.load(bytes, { updateMetadata: false }), js = await pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
+      try {
+        for (let i = 0; i < d.getPageCount(); i++) {
+          if (!all && i !== pi) continue;
+          const vp = (await js.getPage(i + 1)).getViewport({ scale: 1 });
+          const a = vp.convertToPdfPoint(R.l * vp.width, R.t * vp.height), b = vp.convertToPdfPoint(R.r * vp.width, R.b * vp.height);
+          const x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]), w = Math.abs(a[0] - b[0]), hh = Math.abs(a[1] - b[1]), pg = d.getPage(i);
+          for (const k of ['TrimBox', 'BleedBox', 'ArtBox']) pg.node.delete(PDFLib.PDFName.of(k));
+          pg.setMediaBox(x, y, w, hh); pg.setCropBox(x, y, w, hh);
+        }
+      } finally { try { js.destroy(); } catch (e) {} }
+      return await d.save();
+    }, () => goToPage(pi));
+    if (ok) toast(all ? "Alle pagina's zijn bijgesneden." : 'Pagina ' + (pi + 1) + ' is bijgesneden.');
+  } })], { wide: true });
+}
+
+/* ---------- invulvelden en links: vakken op de pagina, die bij opslaan echt worden ---------- */
+function extraAnnotItems(a) {
+  const col = a.t === 'field' ? '#1F4FD1' : '#8E44AD', its = [
+    { k: 'path', segs: boxSegs(a), fill: col, o: 0.13, screenOnly: true },
+    { k: 'path', segs: boxSegs(a), stroke: col, sw: 1, miter: true, screenOnly: true }];
+  const label = a.quiet ? '' : a.t === 'field' ? (a.kind === 'check' ? '' : a.name) : (a.url ? a.url.replace(/^https?:\/\//, '') : 'naar p. ' + (S.pages.findIndex(p => p.id === a.page) + 1));
+  const fs = Math.min(9, a.h * 0.62);
+  if (label && fs >= 5 && a.w > 30) {
+    const str = safeText(label), maxW = a.w - 8, wFull = widthOf(str, 'helv', fs);
+    const [x, y] = L2V(a, -a.w / 2 + 4, Math.min(a.h / 2 - 3, -a.h / 2 + fs + 2));
+    its.push({ k: 'text', x, y, size: fs, font: 'helv', c: col, str, w: Math.min(wFull, maxW), rot: a.rot || 0, screenOnly: true });
+  }
+  return its;
+}
+function placeBox(a, w, hh) {
+  const i = curIndex(), p = S.pages[i];
+  if (!p) return null;
+  const rt = RT.get(p.id), pr = rt.el.getBoundingClientRect(), vr = viewer.getBoundingClientRect();
+  const cxp = (Math.max(pr.left, vr.left) + Math.min(pr.right, vr.right)) / 2, cyp = (Math.max(pr.top, vr.top) + Math.min(pr.bottom, vr.bottom)) / 2;
+  Object.assign(a, { id: uid(), rot: 0, w: Math.min(w, viewW(p) * 0.8), h: hh,
+    cx: clamp((cxp - pr.left) / pr.width * viewW(p), 20, viewW(p) - 20), cy: clamp((cyp - pr.top) / pr.height * viewH(p), 20, viewH(p) - 20) });
+  p.annots.push(a);
+  setTool('select', true);
+  drawAnnots(p);
+  setSel(a.id);
+  commit();
+  return a;
+}
+function openFieldAdd() {
+  let kind = 'text';
+  const n = S.pages.reduce((s, p) => s + p.annots.filter(a => a.t === 'field').length, 0) + 1;
+  const name = h('input', { class: 'input', id: 'fldName', type: 'text', value: 'Veld ' + n, autocomplete: 'off' });
+  const row = h('div');
+  const draw = () => { row.textContent = ''; row.append(chips([['text', 'Tekstregel'], ['multi', 'Groot tekstvak'], ['check', 'Aankruisvakje']], kind, v => { kind = v; draw(); })); };
+  draw();
+  const sh = sheet('Invulveld toevoegen', [
+    h('div', { class: 'field' }, h('span', { text: 'Soort veld' }), row),
+    h('div', { class: 'field' }, h('label', { for: 'fldName', text: 'Naam van het veld' }), name),
+    h('p', { class: 'hint', text: 'Het veld komt als blauw vak op de pagina. Sleep het op zijn plek en maak het op maat. Na het opslaan kan iedereen het invullen in zijn eigen pdf-lezer.' })],
+  [h('button', { class: 'btn btn-primary', html: ico('field') + '<span>Zet op de pagina</span>', onclick: () => {
+    const nm = name.value.trim() || 'Veld ' + n;
+    sh.close();
+    placeBox({ t: 'field', kind, name: nm }, kind === 'check' ? 16 : kind === 'multi' ? 260 : 190, kind === 'check' ? 16 : kind === 'multi' ? 72 : 22);
+    toast('Veld geplaatst. Sleep het op zijn plek.');
+  } })]);
+  setTimeout(() => { name.focus(); name.select(); }, 60);
+}
+function openLinkAdd() {
+  let kind = 'url';
+  const url = h('input', { class: 'input', id: 'lnkUrl', type: 'url', placeholder: 'https://…', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+  const pageNo = h('input', { class: 'input', id: 'lnkPage', type: 'number', min: 1, max: S.pages.length, value: Math.min(S.pages.length, curIndex() + 2) });
+  const body = h('div', { style: { display: 'grid', gap: '12px' } });
+  const draw = () => {
+    body.textContent = '';
+    body.append(h('div', { class: 'field' }, h('span', { text: 'Waar gaat de link heen?' }), chips([['url', 'Website of e-mail'], ['page', 'Pagina in dit document']], kind, v => { kind = v; draw(); })),
+      kind === 'url' ? h('div', { class: 'field' }, h('label', { for: 'lnkUrl', text: 'Adres' }), url) : h('div', { class: 'field' }, h('label', { for: 'lnkPage', text: 'Paginanummer (1 tot ' + S.pages.length + ')' }), pageNo));
+  };
+  draw();
+  const sh = sheet('Link toevoegen', [body, h('p', { class: 'hint', text: 'De link komt als paars vak op de pagina. Leg het over de tekst of het plaatje dat moet werken als link. In de opgeslagen PDF is het vak onzichtbaar.' })],
+  [h('button', { class: 'btn btn-primary', html: ico('link') + '<span>Zet op de pagina</span>', onclick: () => {
+    const a = { t: 'link' };
+    if (kind === 'url') {
+      let u = url.value.trim();
+      if (!u) { toast('Vul eerst een adres in.', true); return; }
+      if (/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(u)) u = 'mailto:' + u;
+      else if (!/^[a-z][a-z0-9+.-]*:/i.test(u)) u = 'https://' + u;
+      a.url = u;
+    } else {
+      const k = parseInt(pageNo.value, 10);
+      if (!(k >= 1 && k <= S.pages.length)) { toast('Kies een paginanummer van 1 tot ' + S.pages.length + '.', true); return; }
+      a.page = S.pages[k - 1].id;
+    }
+    sh.close();
+    placeBox(a, 150, 20);
+    toast('Link geplaatst. Leg het vak over de tekst die moet werken als link.');
+  } })]);
+}
+/* Wordt door buildPdf aangeroepen als alle pagina's staan: maakt van de vakken echte velden en links, en schrijft de bladwijzers. */
+function finishExtras(out, built) {
+  const L = PDFLib, cx = out.context, byId = new Map();
+  for (const b of built) if (!byId.has(b.p.id)) byId.set(b.p.id, b);
+  const rectOf = (a, T) => {
+    const xs = [], ys = [];
+    for (const [lx, ly] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const [vx, vy] = L2V(a, lx * a.w / 2, ly * a.h / 2); xs.push(T[0] * vx + T[2] * vy + T[4]); ys.push(T[1] * vx + T[3] * vy + T[5]); }
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  };
+  let form = null;
+  const names = new Set();
+  for (const b of built) for (const a of b.p.annots) {
+    if (a.t === 'field') {
+      try {
+        form = form || out.getForm();
+        const base = (a.name || 'Veld').replace(/[.\s]+/g, ' ').trim() || 'Veld';
+        let nm = base, k = 2;
+        while (names.has(nm) || form.getFieldMaybe(nm)) nm = base + ' ' + k++;
+        names.add(nm);
+        const r = rectOf(a, b.T), opt = { x: r[0], y: r[1], width: r[2] - r[0], height: r[3] - r[1], borderWidth: 0.75, borderColor: L.rgb(0.42, 0.47, 0.56), backgroundColor: L.rgb(0.97, 0.98, 1) };
+        if (a.kind === 'check') form.createCheckBox(nm).addToPage(b.page, opt);
+        else {
+          const tf = form.createTextField(nm);
+          if (a.kind === 'multi') tf.enableMultiline();
+          tf.addToPage(b.page, opt);
+          tf.setFontSize(a.kind === 'multi' ? 10 : clamp(Math.round(Math.min(opt.width, opt.height) * 0.55), 7, 12));
+        }
+      } catch (e) { console.warn('veld overgeslagen', e); }
+    } else if (a.t === 'link') {
+      const r = rectOf(a, b.T), d = { Type: 'Annot', Subtype: 'Link', Rect: r, Border: [0, 0, 0] };
+      if (a.url) d.A = { Type: 'Action', S: 'URI', URI: L.PDFString.of(a.url) };
+      else { const t = byId.get(a.page); if (!t) continue; d.Dest = [t.page.ref, 'Fit']; }
+      b.page.node.addAnnot(cx.register(cx.obj(d)));
+    }
+  }
+  if (Array.isArray(S.outline)) {
+    const items = S.outline.filter(o => byId.has(o.page) && o.title);
+    items.sort((p, q) => built.indexOf(byId.get(p.page)) - built.indexOf(byId.get(q.page)));
+    if (!items.length) out.catalog.delete(L.PDFName.of('Outlines'));
+    else {
+      const root = cx.nextRef(), refs = items.map(() => cx.nextRef());
+      items.forEach((o, i) => {
+        const d = { Title: L.PDFHexString.fromText(o.title), Parent: root, Dest: [byId.get(o.page).page.ref, 'Fit'] };
+        if (i > 0) d.Prev = refs[i - 1];
+        if (i < items.length - 1) d.Next = refs[i + 1];
+        cx.assign(refs[i], cx.obj(d));
+      });
+      cx.assign(root, cx.obj({ Type: 'Outlines', First: refs[0], Last: refs[refs.length - 1], Count: items.length }));
+      out.catalog.set(L.PDFName.of('Outlines'), root);
+    }
+  }
+}
+
+/* ---------- bladwijzers en inhoudsopgave ---------- */
+async function loadOutline() {
+  if (Array.isArray(S.outline)) return;
+  S.outline = [];
+  const seen = new Set();
+  for (const p of S.pages) {
+    if (seen.has(p.src)) continue;
+    seen.add(p.src);
+    const src = S.sources[p.src];
+    try {
+      const walk = async list => {
+        for (const o of list || []) {
+          let dest = o.dest;
+          if (typeof dest === 'string') dest = await src.pdf.getDestination(dest);
+          if (Array.isArray(dest) && dest[0]) {
+            const idx = typeof dest[0] === 'number' ? dest[0] : await src.pdf.getPageIndex(dest[0]);
+            const pg = S.pages.find(q => q.src === src.id && q.idx === idx);
+            if (pg && o.title) S.outline.push({ title: o.title.trim(), page: pg.id });
+          }
+          await walk(o.items);
+        }
+      };
+      await walk(await src.pdf.getOutline());
+    } catch (e) {}
+  }
+}
+async function pageTitleGuess(p) {
+  const ix = await textIndex(p), s = ix.raw.trim().replace(/\s+/g, ' ');
+  if (!s) return 'Pagina ' + (S.pages.indexOf(p) + 1);
+  // de eerste regel van de pagina is meestal de kop
+  const tc = await getText(S.sources[p.src], p.idx);
+  let first = '';
+  for (const it of tc.items) { first += it.str; if (it.hasEOL && first.trim()) break; }
+  first = first.trim().replace(/\s+/g, ' ');
+  if (first.length >= 3 && first.length <= 60) return first;
+  const cut = s.slice(0, 48), end = cut.search(/[.!?:]\s/);
+  return (end > 8 ? cut.slice(0, end) : s.length > 48 ? cut.replace(/\s\S*$/, '') : cut).trim();
+}
+async function openBookmarks() {
+  endTextEdit();
+  await loadOutline();
+  const list = h('div', { style: { display: 'grid', gap: '8px' } });
+  const pno = o => S.pages.findIndex(p => p.id === o.page) + 1;
+  const tocBtn = h('button', { class: 'btn', html: ico('textfile') + '<span>Maak een inhoudsopgave-pagina</span>' });
+  const draw = () => {
+    S.outline = S.outline.filter(o => pno(o) > 0).sort((a, b) => pno(a) - pno(b));
+    list.textContent = '';
+    if (!S.outline.length) list.append(h('p', { class: 'hint', text: 'Nog geen bladwijzers. Blader naar een pagina en voeg hem toe.' }));
+    S.outline.forEach((o, i) => {
+      const inp = h('input', { class: 'input', type: 'text', value: o.title, 'aria-label': 'Titel van bladwijzer ' + (i + 1) });
+      inp.addEventListener('input', () => { o.title = inp.value; setDirty(true); });
+      list.append(h('div', { class: 'bm-row' }, inp, h('small', { text: 'p. ' + pno(o) }),
+        h('button', { class: 'icon-btn', 'aria-label': 'Verwijder bladwijzer', html: ico('trash'), onclick: () => { S.outline.splice(i, 1); setDirty(true); draw(); } })));
+    });
+    tocBtn.disabled = !S.outline.length;
+  };
+  const addBtn = h('button', { class: 'btn btn-primary', html: ico('bookmark') + '<span>Voeg pagina ' + (curIndex() + 1) + ' toe</span>', onclick: async () => {
+    const p = S.pages[curIndex()];
+    S.outline.push({ title: await pageTitleGuess(p), page: p.id });
+    setDirty(true); draw();
+  } });
+  tocBtn.addEventListener('click', async () => {
+    const items = S.outline.filter(o => o.title.trim()).slice(0, 28);
+    sh.close();
+    busy('Inhoudsopgave maken');
+    try {
+      const src = await blankSource(), pages = await pagesOf(src), tp = pages[0];
+      S.sources[src.id] = src;
+      S.pages.unshift(tp);
+      const font = S.style.text.font, mk = (text, x, y, fs, bold) => {
+        const a = { id: uid(), t: 'text', text, fs, c: '#17202B', font, bold: !!bold, rot: 0, fixed: false, w: 24, h: fs * 1.25 + 4, cx: 0, cy: 0 };
+        layoutText(a, tp);
+        a.cx = x + a.w / 2; a.cy = y;
+        tp.annots.push(a);
+        return a;
+      };
+      mk('Inhoud', 64, 86, 24, true);
+      items.forEach((o, i) => {
+        const y = 140 + i * 23, n = String(pno(o));
+        const t = mk(o.title.trim().slice(0, 70), 64, y, 12, false), nr = mk(n, 0, y, 12, false);
+        nr.cx = viewW(tp) - 64 - nr.w / 2;
+        const x0 = 64 + t.w + 6, x1 = viewW(tp) - 64 - nr.w - 6;
+        if (x1 - x0 > 12) tp.annots.push({ id: uid(), t: 'line', x1: x0, y1: y + 3, x2: x1, y2: y + 3, c: '#B8C0CC', w: 0.6 });
+        tp.annots.push({ id: uid(), t: 'link', quiet: true, page: o.page, rot: 0, cx: viewW(tp) / 2, cy: y, w: viewW(tp) - 120, h: 20 });
+      });
+      commit();
+      buildPages(false);
+      goToPage(0);
+      toast('Inhoudsopgave staat vooraan. De regels werken als link in de opgeslagen PDF.');
+    } catch (e) { toast((e && e.message) || 'De inhoudsopgave kon niet worden gemaakt.', true); }
+    finally { busyOff(); }
+  });
+  draw();
+  const sh = sheet('Bladwijzers en inhoudsopgave', [
+    h('p', { text: 'Bladwijzers staan in het zijpaneel van een pdf-lezer, zodat je snel naar een hoofdstuk springt.' }), list],
+  [tocBtn, addBtn], { wide: true });
+}

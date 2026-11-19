@@ -242,7 +242,7 @@ async function buildPdf(pageList, opt) {
       return this.imgs[id];
     },
   };
-  const order = [];
+  const order = [], built = [];
   try {
     for (let i = 0; i < N; i++) {
       const p = pageList[i], src = S.sources[p.src];
@@ -264,9 +264,10 @@ async function buildPdf(pageList, opt) {
       }
       const items = fxItems(p, i, N);
       for (const a of p.annots) { if (a.t === 'text' && !a.lines) layoutText(a, p); items.push(...annotItems(a)); }
-      for (const it of items) await drawItem(ctx, page, it, T);
+      for (const it of items) if (!it.screenOnly) await drawItem(ctx, page, it, T);
       for (const a of p.annots) if (a.t === 'note' && a.text) addNoteAnnot(ctx, page, a, T);
       order.push(page.ref);
+      built.push({ p, page, T });
     }
   } finally {
     for (const d of ctx.temp) { try { d.destroy(); } catch (e) {} }
@@ -279,12 +280,18 @@ async function buildPdf(pageList, opt) {
     for (const ref of order) out.context.lookup(ref).set(L.PDFName.of('Parent'), pagesRef);
     try { out.pageCount = order.length; if (out.pageCache && out.pageCache.invalidate) out.pageCache.invalidate(); } catch (e) {}
   }
+  if (!opt.plain) finishExtras(out, built);
   if (S.meta) {
     out.setTitle(S.meta.title || ''); out.setAuthor(S.meta.author || ''); out.setSubject(S.meta.subject || '');
     out.setKeywords((S.meta.keywords || '').split(',').map(s => s.trim()).filter(Boolean));
   }
   out.setModificationDate(new Date());
-  if (opt.password) out.encrypt({ userPassword: opt.password, ownerPassword: opt.password });
+  const rs = opt.restrict, limited = rs && (rs.print || rs.copy || rs.edit);
+  if (limited) {
+    // beperkingen gelden alleen als het eigenaarswachtwoord anders is dan het wachtwoord om te openen
+    const owner = Array.from(crypto.getRandomValues(new Uint8Array(18)), b => b.toString(36)).join('');
+    out.encrypt({ userPassword: opt.password || '', ownerPassword: owner, permissions: { printing: rs.print ? false : 'highResolution', copying: !rs.copy, modifying: !rs.edit, annotating: !rs.edit, documentAssembly: !rs.edit, fillingForms: true, contentAccessibility: true } });
+  } else if (opt.password) out.encrypt({ userPassword: opt.password, ownerPassword: opt.password });
   prog(1);
   await tick();
   try { return await out.save(); } catch (e) { return await out.save({ updateFieldAppearances: false }); }
@@ -313,12 +320,19 @@ function openSave() {
   const body = [h('div', { class: 'field' }, h('label', { for: 'saveName', text: 'Bestandsnaam' }), name)];
   if (hasForm) body.push(h('label', { class: 'check', for: 'saveFlat' }, flat, h('span', null, 'Maak ingevulde velden definitief', h('br'), h('span', { class: 'hint', text: 'De ontvanger kan de velden daarna niet meer aanpassen.' }))));
   body.push(h('div', { class: 'field' }, h('label', { for: 'savePw', text: 'Wachtwoord om te openen (mag leeg)' }), pw));
+  const rsBox = (id, label) => h('input', { type: 'checkbox', id });
+  const noPrint = rsBox('saveNoPrint'), noCopy = rsBox('saveNoCopy'), noEdit = rsBox('saveNoEdit');
+  body.push(h('div', { class: 'field' }, h('span', { text: 'De ontvanger mag niet (mag je overslaan)' }),
+    h('label', { class: 'check', for: 'saveNoPrint' }, noPrint, h('span', null, 'afdrukken')),
+    h('label', { class: 'check', for: 'saveNoCopy' }, noCopy, h('span', null, 'tekst kopiëren')),
+    h('label', { class: 'check', for: 'saveNoEdit' }, noEdit, h('span', null, 'wijzigen')),
+    h('span', { class: 'hint', text: 'Nette pdf-lezers houden zich hieraan. Het is een slot op de deur, geen kluis.' })));
   for (const n of notes) body.push(h('p', { class: 'hint', text: n }));
   body.push(h('p', { class: 'hint', text: 'Je krijgt een nieuwe PDF met al je aanpassingen. Het origineel blijft zoals het was.' }));
   const go = async () => {
     const nm = cleanName(name.value);
     sh.close();
-    const bytes = await run('PDF opbouwen', prog => buildPdf(S.pages, { flatten: flat.checked, password: pw.value, progress: prog }));
+    const bytes = await run('PDF opbouwen', prog => buildPdf(S.pages, { flatten: flat.checked, password: pw.value, restrict: { print: noPrint.checked, copy: noCopy.checked, edit: noEdit.checked }, progress: prog }));
     if (!bytes) return;
     if (await saveFile(nm + '.pdf', bytes)) {
       S.name = nm + '.pdf';
@@ -739,7 +753,7 @@ function replaceDoc(list, name, extra) {
   clearThumbs();
   S.sources = {}; S.pages = [];
   S.assets = extra.assets || {}; S.fx = extra.fx || { wm: null, num: null, head: null }; S.meta = extra.meta || null;
-  S.sel = null; S.hist = []; S.fut = [];
+  S.sel = null; S.hist = []; S.fut = []; S.outline = extra.outline;
   for (const it of list) { S.sources[it.src.id] = it.src; S.pages.push(...it.pages); }
   S.name = name; S.isExample = !!extra.isExample;
   Q.q = ''; Q.hits = []; Q.cur = -1;
@@ -956,6 +970,10 @@ function openMenu() {
       item('pages', "Pagina's ordenen", 'Herorden, draai, verwijder, voeg toe', openOrganizer),
       item('hash', 'Paginanummers en koptekst', '', openNumbers),
       item('drop', 'Watermerk', 'Bijvoorbeeld Concept of Vertrouwelijk', openWatermark),
+      item('crop', 'Pagina bijsnijden', 'Randen eraf of een deel uitsnijden', openCrop),
+      item('field', 'Invulveld toevoegen', 'Maak je eigen invulformulier', openFieldAdd),
+      item('link', 'Link toevoegen', 'Naar een website of een pagina', openLinkAdd),
+      item('bookmark', 'Bladwijzers en inhoudsopgave', '', openBookmarks),
       item('qr', 'QR-code maken', 'Link, tekst of wifi-toegang', openQr),
       item('compare', 'Vergelijk met een andere versie', 'Zie woord voor woord wat er veranderd is', openCompare),
       item('shield', 'Persoonsgegevens zwartlakken', 'IBAN, e-mail, telefoon, postcode, BSN', openPrivacy),
@@ -963,6 +981,7 @@ function openMenu() {
     ]),
     group('Opslaan en exporteren', [
       item('save', 'Opslaan als PDF', '', openSave),
+      item('print', 'Afdrukken', '', openPrint),
       item('shrink', 'Verkleinen', 'Slim of tot onder een aantal MB', openCompress),
       item('scan', 'Maak er een scan van', 'Alsof het geprint en gescand is', openScanLook),
       item('split', 'Splitsen', 'In losse PDF\'s', openSplit),

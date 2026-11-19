@@ -113,6 +113,7 @@ function annotItems(a) {
       return [{ k: 'path', segs: [['M', x, y], ['L', x + 18, y], ['L', x + 18, y + 12], ['L', x + 12, y + 18], ['L', x, y + 18], ['Z']], fill: a.c, stroke: '#6B5600', sw: 0.8 },
         { k: 'path', segs: [['M', x + 18, y + 12], ['L', x + 12, y + 12], ['L', x + 12, y + 18], ['M', x + 4, y + 5.5], ['L', x + 14, y + 5.5], ['M', x + 4, y + 9], ['L', x + 14, y + 9]], stroke: '#6B5600', sw: 0.8 }];
     }
+    case 'field': case 'link': return extraAnnotItems(a);
     case 'img': return [{ k: 'img', asset: a.asset, box: a }];
   }
   return [];
@@ -764,7 +765,7 @@ function pointerEnd(e, cancelled) {
     case 'edit': editTextAt(p, d.sx, d.sy); break;
     case 'note': {
       const a = { id: uid(), t: 'note', x: clamp(d.sx - 9, 0, viewW(p) - 18), y: clamp(d.sy - 9, 0, viewH(p) - 18), text: '', c: S.style.note.c };
-      p.annots.push(a); setTool('select', true); setSel(a.id); openNote(a, p, true);
+      p.annots.push(a); setTool('select', true); drawAnnots(p); setSel(a.id); openNote(a, p, true);
       break;
     }
     case 'stamp': {
@@ -772,7 +773,7 @@ function pointerEnd(e, cancelled) {
       const raw = st.own != null ? (st.own.trim() || 'Stempel') : st.label === '@date' ? new Date().toLocaleDateString('nl-NL') : st.label;
       const label = raw.toUpperCase();
       const a = { id: uid(), t: 'stamp', label, c: st.c, rot: 0, cx: d.sx, cy: d.sy, w: widthOf(safeText(label), 'helvB', 15) + 24, h: 30 };
-      p.annots.push(a); commit(); setTool('select', true); setSel(a.id);
+      p.annots.push(a); commit(); setTool('select', true); drawAnnots(p); setSel(a.id);
       break;
     }
     case 'sym': {
