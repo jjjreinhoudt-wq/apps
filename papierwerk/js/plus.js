@@ -24,8 +24,8 @@ Object.assign(ICONS, {
 .cmp-row i { font-style: normal; color: var(--muted); }
 .cmp-sum { font-family: var(--font-display, inherit); font-size: 22px; font-weight: 650; line-height: 1.2; margin: 0 0 6px; }
 .qr-wrap { display: grid; grid-template-columns: 1fr; gap: 14px; }
-.qr-prev { justify-self: center; width: min(220px, 60vw); aspect-ratio: 1; background: #fff; border: 1px solid var(--line); border-radius: 12px; display: grid; place-items: center; padding: 10px; }
-.qr-prev canvas { width: 100%; height: 100%; image-rendering: pixelated; }
+.qr-prev { justify-self: center; width: min(220px, 60vw); min-height: 120px; background: #fff; border: 1px solid var(--line); border-radius: 12px; display: grid; place-items: center; padding: 10px; }
+.qr-prev canvas { width: 100%; height: auto; display: block; }
 .qr-prev p { margin: 0; color: #5A6472; font-size: 13.5px; text-align: center; }
 @media (min-width: 640px) { .qr-wrap { grid-template-columns: 1fr 220px; align-items: start; } .qr-prev { width: 220px; } }
 .leesbalk { position: fixed; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 4px; padding: 6px 8px; background: var(--ink); color: var(--panel); border-radius: 999px; box-shadow: 0 10px 30px rgba(10, 20, 40, .28); max-width: calc(100vw - 16px); }
@@ -263,12 +263,71 @@ function qrCanvas(text, px) {
   for (let r = 0; r < n; r++) for (let col = 0; col < n; col++) if (q.isDark(r, col)) x.fillRect((col + quiet) * cell, (r + quiet) * cell, cell, cell);
   return c;
 }
+/* ---- betaal-QR (EPC/SEPA): naam, IBAN, bedrag en omschrijving in één code die een bank-app kan scannen ---- */
+const PAY_KEY = 'papierwerk.betaal';
+function loadPay() { try { return JSON.parse(localStorage.getItem(PAY_KEY) || 'null') || {}; } catch (e) { return {}; } }
+function storePay(o) { try { if (o) localStorage.setItem(PAY_KEY, JSON.stringify(o)); else localStorage.removeItem(PAY_KEY); } catch (e) {} }
+function ibanClean(v) { return String(v || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase(); }
+function ibanOk(v) {
+  const s = ibanClean(v);
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(s)) return false;
+  const t = (s.slice(4) + s.slice(0, 4)).replace(/[A-Z]/g, c => String(c.charCodeAt(0) - 55));
+  let r = 0;
+  for (const ch of t) r = (r * 10 + +ch) % 97;
+  return r === 1;
+}
+function parseAmount(v) {
+  let s = String(v || '').replace(/[^\d.,-]/g, '');
+  if (!s) return NaN;
+  const c = s.lastIndexOf(','), d = s.lastIndexOf('.');
+  if (c >= 0 && d >= 0) s = c > d ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+  else if (c >= 0) s = /,\d{1,2}$/.test(s) ? s.replace(',', '.') : s.replace(/,/g, '');
+  else if (d >= 0 && !/\.\d{1,2}$/.test(s)) s = s.replace(/\./g, '');
+  return Math.round(parseFloat(s) * 100) / 100;
+}
+const fmtEuro = n => '€ ' + n.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+/* Zoekt in de tekst van het document het te betalen bedrag en het factuurnummer. */
+async function guessInvoice() {
+  let text = '';
+  for (const p of S.pages) text += (await textIndex(p)).raw + ' ';
+  const AM = '(-?\\d{1,3}(?:[.\\s]\\d{3})+(?:,\\d{2})?|-?\\d+(?:[.,]\\d{2})?)', out = {};
+  const after = kw => { const re = new RegExp('(?:' + kw + ')[^0-9€]{0,45}(?:€|EUR)?\\s*' + AM, 'ig'); let m, last = null; while ((m = re.exec(text))) last = m[1]; return last; };
+  let a = after('te betalen|totaal te voldoen|te voldoen|totaal incl(?:usief|\\.)?\\s*btw|totaalbedrag|eindtotaal|factuurbedrag|amount due|total due') || after('totaal|total');
+  if (!a) { let m, best = 0; const re = new RegExp('(?:€|EUR)\\s*' + AM, 'g'); while ((m = re.exec(text))) { const v = parseAmount(m[1]); if (v > best) { best = v; a = m[1]; } } }
+  const amt = parseAmount(a);
+  if (amt > 0) out.amount = amt;
+  const f = /(?:factuur|invoice)\s*(?:nummer|nr\.?|no\.?|number)?\s*[:#]?\s*([A-Z]{0,5}[-\/]?\d[\w\-\/.]{1,18})/i.exec(text);
+  if (f) out.ref = 'Factuur ' + f[1].replace(/[.,]$/, '');
+  return out;
+}
+function epcPayload(o) {
+  const amt = Math.round(o.amount * 100) / 100;
+  return ['BCD', '002', '1', 'SCT', '', o.name.trim().slice(0, 70), ibanClean(o.iban), 'EUR' + amt.toFixed(2), '', '', (o.ref || '').trim().slice(0, 140)].join('\n');
+}
+function payCanvas(o) {
+  const q = qrCanvas(epcPayload(o), 620), W = q.width, pad = 26, lh = 40;
+  const lines = [['bold 34px', 'Scan en betaal met je bank-app'], ['600 30px', fmtEuro(o.amount) + (o.ref ? '  ·  ' + o.ref.trim() : '')],
+    ['26px', ibanClean(o.iban).replace(/(.{4})/g, '$1 ').trim()], ['26px', 't.n.v. ' + o.name.trim()]];
+  const c = document.createElement('canvas'), fam = ' Figtree, Arial, sans-serif';
+  const x0 = c.getContext('2d');
+  let tw = 0;
+  for (const [f, t] of lines) { x0.font = f + fam; tw = Math.max(tw, x0.measureText(t).width); }
+  c.width = Math.ceil(Math.max(W, tw + pad * 2)); c.height = W + lines.length * lh + pad;
+  const x = c.getContext('2d');
+  x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+  x.drawImage(q, Math.round((c.width - W) / 2), 0);
+  x.fillStyle = '#17202B'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  lines.forEach(([f, t], i) => { x.font = f + fam; x.fillText(t, c.width / 2, W + i * lh + lh / 2 - 4); });
+  return c;
+}
 function openQr() {
   if (typeof qrcode !== 'function') { toast('De QR-maker is niet geladen.', true); return; }
   try { qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8']; } catch (e) {}
-  const st = { kind: 'link', link: '', ssid: '', pass: '', open: false };
+  const saved = loadPay();
+  const st = { kind: 'link', link: '', ssid: '', pass: '', open: false, name: saved.name || '', iban: (saved.iban || '').replace(/(.{4})/g, '$1 ').trim(), amount: '', ref: '', keep: true, guessed: false };
   const esc = s => s.replace(/([\\;,:"])/g, '\\$1');
-  const value = () => st.kind === 'link' ? st.link.trim()
+  const payOk = () => st.name.trim() && ibanOk(st.iban) && parseAmount(st.amount) > 0 && parseAmount(st.amount) < 1e9;
+  const value = () => st.kind === 'pay' ? (payOk() ? 'pay' : '') : st.kind === 'link' ? st.link.trim()
     : st.ssid.trim() ? 'WIFI:T:' + (st.open ? 'nopass' : 'WPA') + ';S:' + esc(st.ssid.trim()) + ';' + (st.open ? '' : 'P:' + esc(st.pass) + ';') + ';' : '';
   const prev = h('div', { class: 'qr-prev' });
   const form = h('div', { style: { display: 'grid', gap: '12px' } });
@@ -278,23 +337,30 @@ function openQr() {
   const refresh = () => {
     const v = value();
     prev.textContent = ''; canvas = null;
-    if (!v) prev.append(h('p', { text: st.kind === 'link' ? 'Typ een link of tekst, dan verschijnt de code hier.' : 'Vul de naam van het netwerk in.' }));
+    if (!v) prev.append(h('p', { text: st.kind === 'pay' ? (st.iban.trim() && !ibanOk(st.iban) ? 'Dit rekeningnummer klopt niet. Kijk het nog even na.' : 'Vul naam, rekeningnummer en bedrag in.') : st.kind === 'link' ? 'Typ een link of tekst, dan verschijnt de code hier.' : 'Vul de naam van het netwerk in.' }));
     else {
-      try { canvas = qrCanvas(v, 720); prev.append(canvas); }
+      try { canvas = st.kind === 'pay' ? payCanvas({ name: st.name, iban: st.iban, amount: parseAmount(st.amount), ref: st.ref }) : qrCanvas(v, 720); prev.append(canvas); }
       catch (e) { prev.append(h('p', { text: 'Dit is te veel tekst voor één QR-code. Maak het korter.' })); }
     }
     btnPlace.disabled = btnSave.disabled = !canvas;
   };
   const field = (id, label, key, attrs) => {
-    const inp = h(attrs && attrs.area ? 'textarea' : 'input', Object.assign({ class: 'input', id, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' }, attrs && attrs.area ? { rows: 3 } : { type: (attrs && attrs.type) || 'text' }, attrs && attrs.ph ? { placeholder: attrs.ph } : null));
+    const inp = h(attrs && attrs.area ? 'textarea' : 'input', Object.assign({ class: 'input', id, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' }, attrs && attrs.area ? { rows: 3 } : { type: (attrs && attrs.type) || 'text' }, attrs && attrs.ph ? { placeholder: attrs.ph } : null, attrs && attrs.mode ? { inputmode: attrs.mode } : null));
     inp.value = st[key];
     inp.addEventListener('input', () => { st[key] = inp.value; refresh(); });
     return h('div', { class: 'field' }, h('label', { for: id, text: label }), inp);
   };
   const draw = () => {
     form.textContent = '';
-    form.append(h('div', { class: 'field' }, h('span', { text: 'Wat zit erin?' }), chips([['link', 'Link of tekst'], ['wifi', 'Wifi-toegang']], st.kind, v => { st.kind = v; draw(); })));
-    if (st.kind === 'link') form.append(field('qrLink', 'Link of tekst', 'link', { area: true, ph: 'https://…' }));
+    form.append(h('div', { class: 'field' }, h('span', { text: 'Wat zit erin?' }), chips([['pay', 'Betalen'], ['link', 'Link of tekst'], ['wifi', 'Wifi']], st.kind, v => { st.kind = v; draw(); })));
+    if (st.kind === 'pay') {
+      const keep = h('input', { type: 'checkbox', id: 'qrKeep', checked: st.keep });
+      keep.addEventListener('change', () => { st.keep = keep.checked; });
+      form.append(field('qrAmount', 'Bedrag in euro', 'amount', { ph: '0,00', mode: 'decimal' }), field('qrRef', 'Omschrijving', 'ref', { ph: 'Factuur 2026-001' }),
+        field('qrName', 'Naam van de rekeninghouder', 'name'), field('qrIban', 'Rekeningnummer (IBAN)', 'iban', { ph: 'NL00 BANK 0000 0000 00' }),
+        h('label', { class: 'check', for: 'qrKeep' }, keep, h('span', null, 'Bewaar naam en rekeningnummer op dit apparaat', h('br'), h('span', { class: 'hint', text: 'Ze blijven in deze app op dit apparaat en gaan nergens heen.' }))),
+        h('p', { class: 'hint', text: (st.guessed ? 'Bedrag en omschrijving heb ik uit het document gehaald. Kijk ze na. ' : '') + 'Wie de code scant met zijn bank-app krijgt de overschrijving kant-en-klaar. Dat werkt bij onder meer ING, maar nog niet bij elke bank; daarom staan de gegevens er ook leesbaar onder.' }));
+    } else if (st.kind === 'link') form.append(field('qrLink', 'Link of tekst', 'link', { area: true, ph: 'https://…' }));
     else {
       form.append(field('qrSsid', 'Naam van het netwerk', 'ssid'),
         h('div', { class: 'field' }, h('span', { text: 'Beveiliging' }), chips([[false, 'Met wachtwoord'], [true, 'Open netwerk']], st.open, v => { st.open = v; draw(); })));
@@ -305,9 +371,10 @@ function openQr() {
   };
   btnPlace.addEventListener('click', () => {
     if (!canvas) return;
-    placeAsset(canvas.toDataURL('image/png'), canvas.width, canvas.height, 110);
+    if (st.kind === 'pay') storePay(st.keep ? { name: st.name.trim(), iban: ibanClean(st.iban) } : null);
+    placeAsset(canvas.toDataURL('image/png'), canvas.width, canvas.height, st.kind === 'pay' ? 150 : 110);
     sh.close();
-    toast('QR-code geplaatst. Sleep hem op zijn plek en maak hem groter of kleiner aan de hoeken.');
+    toast(st.kind === 'pay' ? 'Betaal-QR geplaatst. Sleep hem naar een lege plek op de factuur.' : 'QR-code geplaatst. Sleep hem op zijn plek en maak hem groter of kleiner aan de hoeken.');
   });
   btnSave.addEventListener('click', async () => {
     if (!canvas) return;
@@ -316,6 +383,13 @@ function openQr() {
   });
   draw();
   const sh = sheet('QR-code maken', [h('div', { class: 'qr-wrap' }, form, prev)], [btnSave, btnPlace]);
+  // staat er een bedrag in het document, dan is het waarschijnlijk een factuur: meteen de betaalcode klaarzetten
+  guessInvoice().then(g => {
+    if (!sh.el.isConnected || !(g.amount > 0) || st.amount || st.link || st.ssid) return;
+    st.amount = g.amount.toFixed(2).replace('.', ','); st.ref = g.ref || ''; st.guessed = true;
+    if (st.kind === 'link') st.kind = 'pay';
+    draw();
+  }).catch(() => {});
 }
 
 /* ================= voorlezen ================= */
