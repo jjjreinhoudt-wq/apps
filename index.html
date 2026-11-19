@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Apps</title>
+<meta name="theme-color" content="#E9ECF1">
+<style>
+  :root { --desk: #E9ECF1; --panel: #F6F7F9; --ink: #17202B; --muted: #5A6472; --line: #D5DAE2; --accent: #1F4FD1; --mark: #FFDD3C; }
+  @media (prefers-color-scheme: dark) { :root { --desk: #12161C; --panel: #1B212A; --ink: #EEF1F5; --muted: #A3ADBA; --line: #2E3642; --accent: #8FB0FF; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100dvh; background: var(--desk); color: var(--ink); font: 17px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; display: grid; place-items: center; padding: 24px max(20px, env(safe-area-inset-left)) calc(24px + env(safe-area-inset-bottom)); }
+  main { width: min(560px, 100%); }
+  h1 { font-size: clamp(30px, 8vw, 44px); line-height: 1.1; margin: 0 0 6px; letter-spacing: -0.02em; text-wrap: balance; }
+  h1 span { background: linear-gradient(transparent 62%, var(--mark) 62%, var(--mark) 92%, transparent 92%); color: inherit; }
+  p { margin: 0 0 22px; color: var(--muted); }
+  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+  a { display: grid; grid-template-columns: 64px 1fr; gap: 16px; align-items: center; padding: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; color: inherit; text-decoration: none; }
+  a:hover, a:focus-visible { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+  img { width: 64px; height: 64px; border-radius: 15px; display: block; }
+  b { display: block; font-size: 20px; line-height: 1.25; }
+  small { color: var(--muted); font-size: 15px; }
+  .tip { margin: 22px 0 0; font-size: 15px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Twee apps voor je <span>papierwerk</span></h1>
+  <p>Ze werken in je browser, ook zonder internet. Je bestanden blijven op je eigen apparaat.</p>
+  <ul>
+    <li><a href="papierwerk/"><img src="papierwerk/icons/icon-192.png" alt="" width="64" height="64"><span><b>Papierwerk PDF</b><small>Pdf's lezen, bewerken, ondertekenen, scannen en verkleinen</small></span></a></li>
+    <li><a href="omzetter/"><img src="omzetter/icons/icon-192.png" alt="" width="64" height="64"><span><b>Omzetter</b><small>Zet foto's, documenten, tabellen, geluid en video om naar een ander formaat</small></span></a></li>
+  </ul>
+  <p class="tip">Open een app en kies in het menu van je browser voor Installeren of Toevoegen aan startscherm. Daarna staat hij tussen je andere apps.</p>
+</main>
+</body>
+</html>

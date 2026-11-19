@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Omzetter</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#17202B">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+
+<link rel="icon" href="data:,">
+<!-- media="print" tot het geladen is: zo wacht de app niet op de lettertypen als het netwerk traag is (overview.js zet het op "all") -->
+<link id="fontLink" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Figtree:wght@400..700&display=swap" rel="stylesheet" media="print">
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="top">
+  <span class="wordmark">Omzetter</span>
+  <p class="top-note" id="topNote">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+    <span>Je bestanden blijven op dit apparaat</span>
+  </p>
+</header>
+
+<main class="scroll" id="scroll">
+  <div class="wrap" id="wrap">
+
+    <section class="work" aria-label="Omzetten">
+      <h1 id="pageTitle">Wat wil je omzetten?</h1>
+
+      <div class="drop" id="drop">
+        <div class="drop-art" aria-hidden="true">
+          <span class="slip slip-a"><i>heic</i></span>
+          <span class="slip slip-b"><i>docx</i></span>
+          <span class="slip slip-c"><i>pdf</i></span>
+        </div>
+        <div class="drop-text">
+          <p class="drop-lead" id="dropLead">Sleep bestanden hierheen, plak ze met Ctrl+V of kies ze zelf.</p>
+          <p class="hint">Foto's, pdf's, documenten, tabellen, geluid en video. Meerdere tegelijk mag. Er wordt niets geüpload: het omzetten gebeurt in deze browser.</p>
+          <div class="drop-actions">
+            <button class="btn btn-primary btn-big" id="pick" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V5"/><path d="M7 10l5-5 5 5"/><path d="M5 19h14"/></svg>
+              Kies bestanden
+            </button>
+          </div>
+        </div>
+        <input type="file" id="fileInput" multiple hidden>
+      </div>
+
+      <div class="ratios" id="ratios">
+        <h2 id="ratiosTitle">Foto in een andere verhouding</h2>
+        <p class="hint">Van liggend naar staand of andersom. De hele foto blijft in beeld en de nieuwe ruimte wordt aangevuld vanuit de foto zelf, of je snijdt bij.</p>
+        <div class="chips" id="ratioList" role="group" aria-labelledby="ratiosTitle"></div>
+      </div>
+
+      <div class="recipes" id="recipes">
+        <h2 id="recipesTitle">Vaak gedaan</h2>
+        <ul id="recipeList" aria-labelledby="recipesTitle"></ul>
+      </div>
+
+      <div id="groups" class="groups" aria-live="polite"></div>
+    </section>
+
+    <aside class="formats" id="formats" aria-labelledby="formatsTitle">
+      <h2 id="formatsTitle">Dit kan worden omgezet</h2>
+      <div id="formatList" class="format-list"></div>
+      <p class="hint formats-foot" id="formatsFoot"></p>
+      <p class="hint sibling">Een pdf bewerken, invullen of ondertekenen doe je in <a href="../papierwerk/">Papierwerk PDF</a>.</p>
+    </aside>
+
+  </div>
+</main>
+
+<footer class="dock" id="dock" hidden>
+  <div class="dock-in">
+    <div class="dock-status" id="dockStatus" aria-live="polite"></div>
+    <div class="dock-actions">
+      <button class="btn btn-quiet" id="clearAll" type="button">Wis alles</button>
+      <button class="btn" id="saveAll" type="button" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="M7 11l5 5 5-5"/><path d="M5 20h14"/></svg>
+        <span>Alles opslaan (zip)</span>
+      </button>
+      <button class="btn btn-primary btn-big" id="go" type="button">Zet om</button>
+    </div>
+  </div>
+</footer>
+
+<div class="dragveil" id="dragveil" hidden><div class="dragveil-card">Laat los om toe te voegen</div></div>
+<div class="scrim" id="scrim" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet-head">
+      <h2 id="sheetTitle">Voorbeeld</h2>
+      <button class="icon-btn" id="sheetClose" type="button" aria-label="Sluit voorbeeld">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body" id="sheetBody"></div>
+    <div class="sheet-foot" id="sheetFoot"></div>
+  </div>
+</div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script src="pwa.js"></script>
+<script src="js/util.js"></script>
+<script src="js/formats.js"></script>
+<script src="js/overview.js"></script>
+<script src="lib/jszip.min.js" defer></script>
+<script src="lib/pako.min.js" defer></script>
+<script src="lib/utif.js" defer></script>
+<script src="lib/gifenc.js" defer></script>
+<script src="lib/pdf.min.js" defer></script>
+<script src="lib/pdf-lib.min.js" defer></script>
+<script src="lib/xlsx.full.min.js" defer></script>
+<script src="lib/js-yaml.min.js" defer></script>
+<script src="lib/marked.min.js" defer></script>
+<script src="lib/turndown.js" defer></script>
+<script src="lib/mammoth.browser.min.js" defer></script>
+<script src="lib/lame.min.js" defer></script>
+<script src="lib/heic2any.min.js" defer></script>
+<script src="js/docmodel.js" defer></script>
+<script src="js/docpdf.js" defer></script>
+<script src="js/docout.js" defer></script>
+<script src="js/reframe.js" defer></script>
+<script src="js/conv-image.js" defer></script>
+<script src="js/conv-pdf.js" defer></script>
+<script src="js/conv-doc.js" defer></script>
+<script src="js/conv-data.js" defer></script>
+<script src="js/conv-media.js" defer></script>
+<script src="js/conv-misc.js" defer></script>
+<script src="js/conv-klein.js" defer></script>
+<script src="js/rechtzetter.js" defer></script>
+<script src="js/ui.js" defer></script>
+</body>
+</html>
