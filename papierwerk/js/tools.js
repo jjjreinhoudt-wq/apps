@@ -819,7 +819,7 @@ function openNote(a, p, isNew) {
 }
 
 /* ---------- afbeelding of handtekening plaatsen ---------- */
-function placeAsset(url, w, h2, targetW) {
+function placeAsset(url, w, h2, targetW, extra) {
   const i = curIndex(), p = S.pages[i];
   if (!p) return;
   const rt = RT.get(p.id), pr = rt.el.getBoundingClientRect(), vr = viewer.getBoundingClientRect();
@@ -829,6 +829,7 @@ function placeAsset(url, w, h2, targetW) {
   S.assets[id] = { url, w, h: h2 };
   const tw = Math.min(targetW, viewW(p) * 0.8);
   const a = { id: uid(), t: 'img', asset: id, rot: 0, cx, cy, w: tw, h: tw * h2 / w };
+  if (extra) Object.assign(a, extra);
   p.annots.push(a);
   setTool('select', true);
   drawAnnots(p);
