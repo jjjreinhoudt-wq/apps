@@ -961,7 +961,7 @@ async function saveSession() {
     for (const k of keys) if (typeof k === 'string' && k.startsWith('src:') && !keep.has(k)) { await IDB.del(k); sessSaved.delete(k.slice(4)); }
   } catch (e) { /* bewaren is een gemak, geen vereiste */ }
 }
-async function restoreSession() {
+async function restoreSession(quiet) {
   const data = await IDB.get('session');
   if (!data || !data.pages || !data.pages.length) return false;
   const map = {};
@@ -980,7 +980,7 @@ async function restoreSession() {
   fitWidth();
   viewer.scrollTop = 0;
   setDirty(!!data.dirty);
-  toast('Je bent verder waar je was met ' + data.name);
+  if (!quiet) toast('Je bent verder waar je was met ' + data.name);
   return true;
 }
 
@@ -1165,16 +1165,32 @@ async function boot() {
   updateUndoUI();
   getCap('downloads').then(v => { if (v) DL = v; });
   try {
+    // Als losse app: is de app gestart doordat je een pdf opende of deelde, dan hoort die pdf in beeld te komen
+    // en niet het document van de vorige keer. Daarom eerst kijken of er een bestand is meegekomen.
+    let started = false, incoming = null;
+    if (window.PWA) window.PWA.onLaunch(files => { if (started) openDoc(files); else incoming = files; });
     await initFonts();
-    let ok = false;
-    try { ok = await restoreSession(); } catch (e) { ok = false; }
-    if (!ok) await loadExample();
-    window.__gestart = true;
-    if (window.PWA) {                      // als losse app: bestanden die gedeeld of ermee geopend zijn
+    if (window.PWA) {
       const shared = await window.PWA.takeShared();
-      if (shared.length) openDoc(shared);
-      window.PWA.onLaunch(files => openDoc(files));
+      if (shared.length) incoming = shared;
+      else if (!incoming) await new Promise(r => setTimeout(r, 120));   // een meegegeven bestand komt een fractie later binnen
     }
+    let ok = false;
+    if (incoming && incoming.length) {
+      // onopgeslagen werk van de vorige keer niet kwijtraken: dat komt in een tabblad ernaast
+      let prev = null;
+      try { prev = await IDB.get('session'); } catch (e) {}
+      if (prev && prev.dirty) { try { await restoreSession(true); } catch (e) {} }
+      const files = incoming; incoming = null;
+      await openDoc(files);
+      ok = S.pages.length > 0;
+      if (ok && prev && prev.dirty && DOCS.list.length > 1) toast('Je vorige document had nog niet-opgeslagen werk. Het staat in het tabblad ernaast.');
+    }
+    if (!ok) { try { ok = await restoreSession(); } catch (e) { ok = false; } }
+    if (!ok) await loadExample();
+    started = true;
+    window.__gestart = true;
+    if (incoming && incoming.length) { const files = incoming; incoming = null; openDoc(files); }
   } catch (e) {
     console.error(e);
     toast('Papierwerk kon niet starten: ' + (e && e.message ? e.message : 'onbekende fout') + '. Herlaad de pagina.', true);
